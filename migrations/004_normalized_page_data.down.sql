@@ -1,0 +1,14 @@
+DROP TABLE IF EXISTS admin_activities;
+DROP TABLE IF EXISTS assistant_report_summary;
+DROP TABLE IF EXISTS assistant_reports;
+DROP TABLE IF EXISTS assistant_tasks;
+DROP TABLE IF EXISTS assistant_practical_courses;
+DROP TABLE IF EXISTS lecturer_student_grades;
+DROP TABLE IF EXISTS lecturer_grade_courses;
+DROP TABLE IF EXISTS attendance_records;
+DROP TABLE IF EXISTS attendance_sessions;
+DROP TABLE IF EXISTS session_assignments;
+DROP TABLE IF EXISTS course_materials;
+DROP TABLE IF EXISTS course_sessions;
+DROP TABLE IF EXISTS import_lecturer_preview_courses;
+DROP TABLE IF EXISTS ui_options;

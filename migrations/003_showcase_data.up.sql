@@ -1,0 +1,2 @@
+-- Deprecated: page data is now stored in normalized domain tables by 004_normalized_page_data.up.sql.
+-- This migration is intentionally left empty so fresh installs do not create showcase_data.

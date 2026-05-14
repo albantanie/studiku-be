@@ -1,0 +1,1 @@
+-- Legacy JSON payload cache is intentionally not recreated.

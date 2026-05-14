@@ -1,0 +1,236 @@
+@baseUrl = http://localhost:8080/api
+
+### Health check
+GET {{baseUrl}}/health
+
+### Login student
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "mahasiswa@app.com",
+  "password": "password"
+}
+
+### Login admin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@app.com",
+  "password": "password"
+}
+
+### Login lecturer
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "dosen@app.com",
+  "password": "password"
+}
+
+### Login assistant
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "asslab@app.com",
+  "password": "password"
+}
+
+### Student dashboard
+GET {{baseUrl}}/student/dashboard
+
+### Student courses
+GET {{baseUrl}}/student/courses
+
+### Student assignments
+GET {{baseUrl}}/student/assignments
+
+### Student grades
+GET {{baseUrl}}/student/grades
+
+### Student grade semesters
+GET {{baseUrl}}/student/grade-semesters
+
+### Student course detail
+GET {{baseUrl}}/student/courses/1/detail
+
+### Student session detail
+GET {{baseUrl}}/student/sessions/1/detail
+
+### Student materials
+GET {{baseUrl}}/student/materials
+
+### Admin courses
+GET {{baseUrl}}/admin/courses
+
+### Create admin course
+POST {{baseUrl}}/admin/courses
+Content-Type: application/json
+
+{
+  "name": "Pemrograman Backend Go",
+  "instructor": "Dr. Backend Engineer",
+  "assistant": "Asisten Go",
+  "studyProgram": "Teknik Informatika",
+  "academicYear": "Genap 2025/2026",
+  "classCode": "GO-101",
+  "status": "Aktif",
+  "day": "Senin",
+  "startTime": "09:00",
+  "endTime": "11:00",
+  "room": "Lab Backend",
+  "sessions": 14,
+  "credits": 3,
+  "students": 0
+}
+
+### Update admin course
+PUT {{baseUrl}}/admin/courses/1
+Content-Type: application/json
+
+{
+  "id": 1,
+  "name": "Algoritma & Struktur Data",
+  "instructor": "Dr. Ahmad Rahman",
+  "assistant": "Andi Prasetyo, S.Kom",
+  "studyProgram": "Teknik Informatika",
+  "academicYear": "2025/2026",
+  "classCode": "CS301",
+  "status": "Aktif",
+  "day": "Senin & Kamis",
+  "startTime": "08:00",
+  "endTime": "10:00",
+  "room": "Lab 301",
+  "sessions": 14,
+  "credits": 4,
+  "students": 35
+}
+
+### Delete admin course
+DELETE {{baseUrl}}/admin/courses/6
+
+### Academic years
+GET {{baseUrl}}/admin/academic-years
+
+### Create academic year
+POST {{baseUrl}}/admin/academic-years
+Content-Type: application/json
+
+{
+  "name": "2026/2027 Ganjil",
+  "startDate": "2026-08-15",
+  "endDate": "2026-12-31",
+  "semester": "Ganjil",
+  "status": "Mendatang",
+  "totalCourses": 0,
+  "totalStudents": 0
+}
+
+### Students
+GET {{baseUrl}}/admin/students
+
+### Admin dashboard
+GET {{baseUrl}}/admin/dashboard
+
+### Admin attendance
+GET {{baseUrl}}/admin/attendance
+
+### Admin grades
+GET {{baseUrl}}/admin/grades
+
+### Admin reports
+GET {{baseUrl}}/admin/reports
+
+### Admin assignment management
+GET {{baseUrl}}/admin/assignments
+
+### Admin class management
+GET {{baseUrl}}/admin/class-management
+
+### Admin class students
+GET {{baseUrl}}/admin/class-students
+
+### Admin course form options
+GET {{baseUrl}}/admin/course-form-options
+
+### Admin student programs
+GET {{baseUrl}}/admin/student-programs
+
+### Admin labs
+GET {{baseUrl}}/admin/labs
+
+### Admin user tabs
+GET {{baseUrl}}/admin/user-tabs
+
+### Admin import lecturer preview
+GET {{baseUrl}}/admin/import-lecturer-preview
+
+### Admin import file types
+GET {{baseUrl}}/admin/import-file-types
+
+### Lecturer dashboard
+GET {{baseUrl}}/lecturer/dashboard
+
+### Lecturer courses
+GET {{baseUrl}}/lecturer/courses
+
+### Lecturer attendance
+GET {{baseUrl}}/lecturer/attendance
+
+### Lecturer grades
+GET {{baseUrl}}/lecturer/grades
+
+### Assistant dashboard
+GET {{baseUrl}}/assistant/dashboard
+
+### Assistant practicals
+GET {{baseUrl}}/assistant/practicals
+
+### Assistant attendance
+GET {{baseUrl}}/assistant/attendance
+
+### Assistant reports
+GET {{baseUrl}}/assistant/reports
+
+### Create student
+POST {{baseUrl}}/admin/students
+Content-Type: application/json
+
+{
+  "name": "Mahasiswa Baru",
+  "email": "mahasiswa.baru@student.ac.id",
+  "studentId": "TI2026001",
+  "program": "Teknik Informatika",
+  "semester": 1,
+  "courses": ["Pemrograman Backend Go"],
+  "status": "Aktif",
+  "joinDate": "2026-08-15",
+  "isPasswordChanged": false
+}
+
+### Lecturers
+GET {{baseUrl}}/admin/lecturers
+
+### Lab assistants
+GET {{baseUrl}}/admin/lab-assistants
+
+### Classes
+GET {{baseUrl}}/admin/classes
+
+### Create class
+POST {{baseUrl}}/admin/classes
+Content-Type: application/json
+
+{
+  "code": "GO-A1",
+  "name": "Pemrograman Backend Go",
+  "academicYear": "2025/2026",
+  "assistant": "Asisten Go",
+  "schedule": "Senin, 09:00 - 11:00",
+  "room": "Lab Backend",
+  "capacity": 40,
+  "students": [1, 2]
+}
