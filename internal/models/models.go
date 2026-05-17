@@ -168,3 +168,55 @@ type ClassData struct {
 	Capacity      int    `json:"capacity" binding:"required,min=1"`
 	Students      []int  `json:"students"`
 }
+
+type LecturerCourse struct {
+	ID           int    `json:"id"`
+	Code         string `json:"code" binding:"required"`
+	Name         string `json:"name" binding:"required"`
+	Class        string `json:"class" binding:"required"`
+	Semester     string `json:"semester"`
+	AcademicYear string `json:"academicYear"`
+	Students     int    `json:"students"`
+	Schedule     string `json:"schedule"`
+	Room         string `json:"room"`
+	SKS          int    `json:"sks" binding:"required,min=1"`
+	Description  string `json:"description"`
+	Materials    int    `json:"materials"`
+	Assignments  int    `json:"assignments"`
+}
+
+type AdminAssignment struct {
+	ID            int    `json:"id"`
+	Title         string `json:"title" binding:"required"`
+	Course        string `json:"course" binding:"required"`
+	Instructor    string `json:"instructor"`
+	DueDate       string `json:"dueDate" binding:"required"`
+	TotalStudents int    `json:"totalStudents"`
+	Submitted     int    `json:"submitted"`
+	Graded        int    `json:"graded"`
+	Pending       int    `json:"pending"`
+	Status        string `json:"status"`
+	Type          string `json:"type"`
+}
+
+type StudentGradeUpdate struct {
+	Tugas1     int     `json:"tugas1"`
+	Tugas2     int     `json:"tugas2"`
+	Tugas3     int     `json:"tugas3"`
+	UjianAkhir int     `json:"ujianAkhir"`
+	NilaiAkhir float64 `json:"nilaiAkhir"`
+	Grade      string  `json:"grade"`
+}
+
+type ReportReview struct {
+	ID       int    `json:"id"`
+	Score    int    `json:"score" binding:"required,min=0,max=100"`
+	Status   string `json:"status"`
+	Feedback string `json:"feedback"`
+}
+
+type AssignmentSubmission struct {
+	ID       int    `json:"id"`
+	Answer   string `json:"answer"`
+	FileName string `json:"fileName"`
+}

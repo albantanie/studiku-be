@@ -22,6 +22,15 @@ func main() {
 	switch os.Args[1] {
 	case "rest":
 		runREST()
+	case "migrate":
+		if len(os.Args) >= 3 && os.Args[2] == "seed" {
+			runSQL("scripts/migrate_seed.sql")
+			return
+		}
+		fmt.Printf("unknown command: %s\n\n", strings.Join(os.Args[1:], " "))
+		printUsage()
+	case "purge":
+		runSQL("scripts/purge.sql")
 	default:
 		fmt.Printf("unknown command: %s\n\n", os.Args[1])
 		printUsage()
@@ -30,7 +39,9 @@ func main() {
 
 func printUsage() {
 	fmt.Println("Usage:")
-	fmt.Println("  go run main.go rest    Start the Gin REST API server")
+	fmt.Println("  go run main.go rest          Start the Gin REST API server")
+	fmt.Println("  go run main.go migrate seed  Create schema and seed data")
+	fmt.Println("  go run main.go purge         Drop all public database tables")
 }
 
 func runREST() {
@@ -53,6 +64,22 @@ func runREST() {
 	if err := router.Run(":" + cfg.ServerPort); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func runSQL(path string) {
+	cfg := config.Load()
+
+	db, err := database.Connect(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	if err := database.RunSQLFile(db, path); err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("executed %s", path)
 }
 
 func cors(allowedOrigins string) gin.HandlerFunc {

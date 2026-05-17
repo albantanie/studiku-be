@@ -1,3 +1,222 @@
+-- Full database migration + seed for StudiKu.
+-- Run: go run main.go migrate seed
+
+BEGIN;
+
+
+-- >>> 001_init.up.sql
+CREATE TABLE IF NOT EXISTS academic_years (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(100) NOT NULL,
+  start_date DATE NOT NULL,
+  end_date DATE NOT NULL,
+  semester VARCHAR(20) NOT NULL,
+  status VARCHAR(20) NOT NULL DEFAULT 'Mendatang',
+  total_courses INT NOT NULL DEFAULT 0,
+  total_students INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS courses (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  instructor VARCHAR(255) NOT NULL,
+  assistant VARCHAR(255) NOT NULL,
+  study_program VARCHAR(255) NOT NULL DEFAULT 'Teknik Informatika',
+  academic_year VARCHAR(100) NOT NULL DEFAULT 'Genap 2024/2025',
+  class_code VARCHAR(50) NOT NULL DEFAULT '',
+  status VARCHAR(20) NOT NULL DEFAULT 'Aktif',
+  day VARCHAR(50) NOT NULL DEFAULT '',
+  start_time VARCHAR(10) NOT NULL DEFAULT '',
+  end_time VARCHAR(10) NOT NULL DEFAULT '',
+  room VARCHAR(100) NOT NULL DEFAULT '',
+  sessions INT NOT NULL DEFAULT 14 CHECK (sessions > 0),
+  credits INT NOT NULL DEFAULT 3 CHECK (credits > 0),
+  students INT NOT NULL DEFAULT 0 CHECK (students >= 0),
+  attendance_present INT NOT NULL DEFAULT 0,
+  attendance_total INT NOT NULL DEFAULT 12,
+  color VARCHAR(50) NOT NULL DEFAULT 'bg-blue-500',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS assignments (
+  id SERIAL PRIMARY KEY,
+  title VARCHAR(255) NOT NULL,
+  course VARCHAR(255) NOT NULL,
+  assistant VARCHAR(255) NOT NULL,
+  due_date VARCHAR(50) NOT NULL,
+  due_time VARCHAR(10) NOT NULL DEFAULT '23:59',
+  status VARCHAR(20) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending','submitted','graded')),
+  course_color VARCHAR(50) NOT NULL DEFAULT 'bg-blue-500',
+  submitted_date VARCHAR(50),
+  score INT,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS grades (
+  id SERIAL PRIMARY KEY,
+  course_name VARCHAR(255) NOT NULL,
+  code VARCHAR(50) NOT NULL,
+  semester VARCHAR(50) NOT NULL,
+  credits INT NOT NULL CHECK (credits > 0),
+  grade VARCHAR(5) NOT NULL,
+  score INT NOT NULL CHECK (score >= 0 AND score <= 100),
+  color VARCHAR(50) NOT NULL DEFAULT 'bg-blue-500',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS students (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password VARCHAR(255) NOT NULL,
+  default_password VARCHAR(255) NOT NULL,
+  student_id VARCHAR(50) NOT NULL UNIQUE,
+  program VARCHAR(255) NOT NULL,
+  semester INT NOT NULL CHECK (semester > 0),
+  courses TEXT[] NOT NULL DEFAULT '{}',
+  status VARCHAR(50) NOT NULL DEFAULT 'Aktif',
+  join_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  is_password_changed BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS lecturers (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password VARCHAR(255) NOT NULL DEFAULT 'password',
+  default_password VARCHAR(255) NOT NULL DEFAULT 'password',
+  nidn VARCHAR(50) NOT NULL UNIQUE,
+  courses TEXT[] NOT NULL DEFAULT '{}',
+  is_password_changed BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS lab_assistants (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  phone VARCHAR(50) NOT NULL DEFAULT '',
+  student_id VARCHAR(50) NOT NULL UNIQUE,
+  lab VARCHAR(255) NOT NULL,
+  supervisor VARCHAR(255) NOT NULL DEFAULT '',
+  semester INT NOT NULL DEFAULT 1,
+  gpa NUMERIC(3,2) NOT NULL DEFAULT 0,
+  assigned_courses INT NOT NULL DEFAULT 0,
+  weekly_hours INT NOT NULL DEFAULT 0,
+  status VARCHAR(50) NOT NULL DEFAULT 'Aktif',
+  join_date DATE NOT NULL DEFAULT CURRENT_DATE,
+  password VARCHAR(255) NOT NULL DEFAULT 'password',
+  default_password VARCHAR(255) NOT NULL DEFAULT 'password',
+  is_password_changed BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS classes (
+  id SERIAL PRIMARY KEY,
+  code VARCHAR(50) NOT NULL UNIQUE,
+  name VARCHAR(255) NOT NULL,
+  academic_year VARCHAR(50) NOT NULL,
+  assistant VARCHAR(255) NOT NULL DEFAULT '',
+  schedule VARCHAR(255) NOT NULL DEFAULT '',
+  room VARCHAR(100) NOT NULL DEFAULT '',
+  total_students INT NOT NULL DEFAULT 0,
+  capacity INT NOT NULL CHECK (capacity > 0),
+  students INT[] NOT NULL DEFAULT '{}',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- <<< 001_init.up.sql
+
+-- >>> 002_seed.up.sql
+INSERT INTO academic_years (id,name,start_date,end_date,semester,status,total_courses,total_students) VALUES
+(1,'2024/2025 Genap','2025-01-15','2025-06-30','Genap','Aktif',48,1234),
+(2,'2024/2025 Ganjil','2024-08-15','2024-12-31','Ganjil','Selesai',45,1189),
+(3,'2025/2026 Ganjil','2025-08-15','2025-12-31','Ganjil','Mendatang',0,0),
+(4,'2023/2024 Genap','2024-01-15','2024-06-30','Genap','Selesai',42,1098)
+ON CONFLICT (id) DO NOTHING;
+SELECT setval('academic_years_id_seq', (SELECT COALESCE(MAX(id), 1) FROM academic_years));
+
+INSERT INTO courses (id,name,instructor,assistant,study_program,academic_year,class_code,status,day,start_time,end_time,room,sessions,credits,students,attendance_present,attendance_total,color) VALUES
+(1,'Algoritma & Struktur Data','Dr. Ahmad Rahman','Andi Prasetyo, S.Kom','Teknik Informatika','2025/2026','CS301','Aktif','Senin & Kamis','08:00','10:00','Lab 301',14,4,35,10,12,'bg-blue-500'),
+(2,'Basis Data Lanjutan','Prof. Siti Nurhaliza','Budi Santoso, M.Kom','Teknik Informatika','2025/2026','CS302','Aktif','Selasa','10:00','13:00','Ruang 402',14,3,142,12,12,'bg-blue-500'),
+(3,'Pemrograman Web','Ir. Budi Hartono','Dewi Lestari, S.Kom','Teknik Informatika','Genap 2024/2025','TI-201','Aktif','Rabu & Jumat','13:00','15:00','Lab Komputer 1',14,3,156,11,12,'bg-blue-500'),
+(4,'Jaringan Komputer','Dr. Rina Kusuma','Eko Wijaya, M.T','Teknik Informatika','Genap 2024/2025','CS304','Aktif','Kamis','15:00','18:00','Lab 304',14,3,138,9,12,'bg-blue-500'),
+(5,'Rekayasa Perangkat Lunak','Prof. Agus Setiawan','Fina Marlina, S.Kom','Teknik Informatika','Genap 2024/2025','TI-305','Aktif','Selasa','08:00','10:00','Ruang 402',12,3,124,12,12,'bg-blue-500')
+ON CONFLICT (id) DO NOTHING;
+SELECT setval('courses_id_seq', (SELECT COALESCE(MAX(id), 1) FROM courses));
+
+INSERT INTO assignments (id,title,course,assistant,due_date,due_time,status,course_color,submitted_date,score) VALUES
+(1,'Project Akhir Basis Data','Basis Data Lanjutan','Dr. Ahmad Fauzi, M.Kom','5 Jan 2026','23:59','pending','bg-blue-500',NULL,NULL),
+(2,'Quiz Sorting Algorithms','Algoritma & Struktur Data','Rina Susanti, S.Kom','7 Jan 2026','23:59','pending','bg-blue-500',NULL,NULL),
+(3,'Tugas Routing Protocol','Jaringan Komputer','Budi Prasetyo, M.T','10 Jan 2026','23:59','pending','bg-blue-500',NULL,NULL),
+(4,'Implementasi REST API','Pemrograman Web','Sarah Anggraini, S.Kom','12 Jan 2026','23:59','pending','bg-blue-500',NULL,NULL),
+(5,'Essay Arsitektur Microservices','Pemrograman Web','Sarah Anggraini, S.Kom','15 Jan 2026','23:59','pending','bg-blue-500',NULL,NULL),
+(6,'Implementasi Binary Search Tree','Algoritma & Struktur Data','Rina Susanti, S.Kom','28 Des 2025','23:59','submitted','bg-blue-500','27 Des 2025',NULL),
+(7,'Laporan Praktikum Subnetting','Jaringan Komputer','Budi Prasetyo, M.T','20 Des 2025','23:59','graded','bg-blue-500',NULL,92)
+ON CONFLICT (id) DO NOTHING;
+SELECT setval('assignments_id_seq', (SELECT COALESCE(MAX(id), 1) FROM assignments));
+
+INSERT INTO grades (id,course_name,code,semester,credits,grade,score,color) VALUES
+(1,'Algoritma & Struktur Data','CS301','2025/2026',4,'A',88,'bg-blue-500'),
+(2,'Basis Data Lanjutan','CS302','2025/2026',3,'A-',85,'bg-blue-500'),
+(3,'Pemrograman Web','CS303','2025/2026',3,'B+',78,'bg-blue-500'),
+(4,'Jaringan Komputer','CS304','2025/2026',3,'A',90,'bg-blue-500'),
+(5,'Interaksi Manusia Komputer','CS201','2024/2025',3,'A',92,'bg-blue-500'),
+(6,'Sistem Operasi','CS202','2024/2025',4,'B+',82,'bg-blue-500')
+ON CONFLICT (id) DO NOTHING;
+SELECT setval('grades_id_seq', (SELECT COALESCE(MAX(id), 1) FROM grades));
+
+INSERT INTO students (id,name,email,password,default_password,student_id,program,semester,courses,status,join_date,is_password_changed) VALUES
+(1,'Ahmad Rizki','ahmad.rizki@student.ac.id','password','password','TI2021001','Teknik Informatika',6,ARRAY['Pemrograman Web','Basis Data','Algoritma'],'Aktif','2021-08-15',true),
+(2,'Siti Nurhaliza','siti.nurhaliza@student.ac.id','password','password','TI2021002','Teknik Informatika',6,ARRAY['Pemrograman Web','Jaringan Komputer'],'Aktif','2021-08-15',false),
+(3,'Budi Santoso','budi.santoso@student.ac.id','password','password','TI2022001','Teknik Informatika',4,ARRAY['Analisis Sistem','Manajemen Proyek'],'Aktif','2022-08-20',false),
+(4,'Dewi Lestari','dewi.lestari@student.ac.id','password','password','TI2021003','Teknik Informatika',6,ARRAY['Desain Grafis','Tipografi'],'Cuti','2021-08-15',true),
+(5,'Eko Prasetyo','eko.prasetyo@student.ac.id','password','password','TI2023001','Teknik Informatika',2,ARRAY['Dasar Pemrograman','Matematika Diskrit'],'Aktif','2023-08-25',false)
+ON CONFLICT (id) DO NOTHING;
+SELECT setval('students_id_seq', (SELECT COALESCE(MAX(id), 1) FROM students));
+
+INSERT INTO lecturers (id,name,email,password,default_password,nidn,courses,is_password_changed) VALUES
+(1,'Dr. Budi Santoso, M.Kom','budi.santoso@university.ac.id','password','password','0123456789',ARRAY['Pemrograman Web','Basis Data','Rekayasa Perangkat Lunak'],false),
+(2,'Dr. Siti Aminah, M.T','siti.aminah@university.ac.id','password','password','0123456790',ARRAY['Algoritma dan Struktur Data','Matematika Diskrit'],false),
+(3,'Ir. Ahmad Fauzi, M.Sc','ahmad.fauzi@university.ac.id','password','password','0123456791',ARRAY['Jaringan Komputer','Sistem Operasi','Keamanan Jaringan'],false),
+(4,'Dr. Dewi Lestari, M.Kom','dewi.lestari@university.ac.id','password','password','0123456792',ARRAY['Kecerdasan Buatan','Machine Learning'],false)
+ON CONFLICT (id) DO NOTHING;
+SELECT setval('lecturers_id_seq', (SELECT COALESCE(MAX(id), 1) FROM lecturers));
+
+INSERT INTO lab_assistants (id,name,email,phone,student_id,lab,supervisor,semester,gpa,assigned_courses,weekly_hours,status,join_date,password,default_password,is_password_changed) VALUES
+(1,'Rama Dhani','rama.dhani@student.ac.id','081234567890','TI2021001','Laboratorium Pemrograman','Dr. Budi Santoso',7,3.85,2,12,'Aktif','2024-09-01','password','password',false),
+(2,'Dina Amelia','dina.amelia@student.ac.id','082345678901','TI2021002','Laboratorium Database','Prof. Siti Aminah',7,3.92,1,8,'Aktif','2024-09-01','password','password',false),
+(3,'Fahmi Akbar','fahmi.akbar@student.ac.id','083456789012','TI2021003','Laboratorium Jaringan','Dr. Ahmad Wijaya',6,3.78,2,10,'Aktif','2024-09-01','password','password',false)
+ON CONFLICT (id) DO NOTHING;
+SELECT setval('lab_assistants_id_seq', (SELECT COALESCE(MAX(id), 1) FROM lab_assistants));
+
+INSERT INTO classes (id,code,name,academic_year,assistant,schedule,room,total_students,capacity,students) VALUES
+(1,'A1','Pemrograman Dasar','2024/2025','Ahmad Fauzi','Senin, 08:00 - 10:00','Lab 301',35,40,ARRAY[1,2,3,4,5]),
+(2,'A2','Struktur Data','2024/2025','Siti Nurhaliza','Selasa, 10:00 - 12:00','Lab 302',38,40,ARRAY[6,7]),
+(3,'B1','Basis Data','2024/2025','Budi Setiawan','Rabu, 13:00 - 15:00','Lab 303',32,40,ARRAY[]::int[]),
+(4,'B2','Pemrograman Web','2024/2025','Dewi Kartika','Kamis, 08:00 - 10:00','Lab 304',40,40,ARRAY[]::int[]),
+(5,'C1','Kecerdasan Buatan','2024/2025','Eko Prasetyo','Jumat, 10:00 - 12:00','Lab 305',28,35,ARRAY[]::int[])
+ON CONFLICT (id) DO NOTHING;
+SELECT setval('classes_id_seq', (SELECT COALESCE(MAX(id), 1) FROM classes));
+
+-- <<< 002_seed.up.sql
+
+-- >>> 003_page_data_legacy_noop.up.sql
+-- Deprecated no-op migration. Page data lives in normalized domain tables from migration 004.
+
+-- <<< 003_page_data_legacy_noop.up.sql
+
+-- >>> 004_normalized_page_data.up.sql
 CREATE TABLE IF NOT EXISTS ui_options (
   id SERIAL PRIMARY KEY,
   option_group VARCHAR(100) NOT NULL,
@@ -286,3 +505,85 @@ INSERT INTO admin_activities (id,action,detail,activity_time,icon,sort_order) VA
 (4,'Nilai diinput','UTS Pemrograman Web - 45 mahasiswa','2 jam lalu','award',4)
 ON CONFLICT (id) DO UPDATE SET action=EXCLUDED.action,detail=EXCLUDED.detail,activity_time=EXCLUDED.activity_time,icon=EXCLUDED.icon,sort_order=EXCLUDED.sort_order;
 SELECT setval('admin_activities_id_seq', (SELECT COALESCE(MAX(id), 1) FROM admin_activities));
+
+-- <<< 004_normalized_page_data.up.sql
+
+-- >>> 006_action_endpoints_schema.up.sql
+ALTER TABLE courses ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS instructor VARCHAR(255) NOT NULL DEFAULT '';
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS total_students INT NOT NULL DEFAULT 0;
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS submitted INT NOT NULL DEFAULT 0;
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS graded INT NOT NULL DEFAULT 0;
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS pending INT NOT NULL DEFAULT 0;
+ALTER TABLE assignments ADD COLUMN IF NOT EXISTS assignment_type VARCHAR(50) NOT NULL DEFAULT 'Tugas';
+UPDATE assignments a SET instructor = COALESCE(c.instructor, a.assistant), total_students = COALESCE(c.students, 0), submitted = CASE WHEN a.status IN ('submitted','graded') THEN COALESCE(c.students,0) ELSE 0 END, graded = CASE WHEN a.status='graded' THEN COALESCE(c.students,0) ELSE 0 END, pending = CASE WHEN a.status='pending' THEN COALESCE(c.students,0) ELSE 0 END, assignment_type = CASE WHEN lower(a.title) LIKE '%quiz%' THEN 'Quiz' WHEN lower(a.title) LIKE '%project%' THEN 'Project' ELSE 'Tugas' END FROM courses c WHERE c.name = a.course;
+
+-- <<< 006_action_endpoints_schema.up.sql
+
+-- >>> 007_admins_and_demo_login_users.up.sql
+CREATE TABLE IF NOT EXISTS admins (
+  id SERIAL PRIMARY KEY,
+  name VARCHAR(255) NOT NULL,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password VARCHAR(255) NOT NULL DEFAULT 'password',
+  default_password VARCHAR(255) NOT NULL DEFAULT 'password',
+  is_password_changed BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO admins (name,email,password,default_password,is_password_changed) VALUES
+('Administrator','admin@app.com','password','password',false)
+ON CONFLICT (email) DO UPDATE SET
+  name = EXCLUDED.name,
+  password = EXCLUDED.password,
+  default_password = EXCLUDED.default_password,
+  is_password_changed = EXCLUDED.is_password_changed,
+  updated_at = CURRENT_TIMESTAMP;
+
+INSERT INTO students (name,email,password,default_password,student_id,program,semester,courses,status,join_date,is_password_changed) VALUES
+('Budi Santoso','mahasiswa@app.com','password','password','DEMO-MHS-001','Teknik Informatika',6,ARRAY['Algoritma & Struktur Data','Basis Data Lanjutan','Pemrograman Web'],'Aktif',CURRENT_DATE,false)
+ON CONFLICT (email) DO UPDATE SET
+  name = EXCLUDED.name,
+  password = EXCLUDED.password,
+  default_password = EXCLUDED.default_password,
+  student_id = EXCLUDED.student_id,
+  program = EXCLUDED.program,
+  semester = EXCLUDED.semester,
+  courses = EXCLUDED.courses,
+  status = EXCLUDED.status,
+  is_password_changed = EXCLUDED.is_password_changed,
+  updated_at = CURRENT_TIMESTAMP;
+
+INSERT INTO lecturers (name,email,password,default_password,nidn,courses,is_password_changed) VALUES
+('Prof. Dr. Ahmad Wijaya','dosen@app.com','password','password','DEMO-DOSEN-001',ARRAY['Algoritma & Struktur Data','Basis Data Lanjutan','Pemrograman Web'],false)
+ON CONFLICT (email) DO UPDATE SET
+  name = EXCLUDED.name,
+  password = EXCLUDED.password,
+  default_password = EXCLUDED.default_password,
+  nidn = EXCLUDED.nidn,
+  courses = EXCLUDED.courses,
+  is_password_changed = EXCLUDED.is_password_changed,
+  updated_at = CURRENT_TIMESTAMP;
+
+INSERT INTO lab_assistants (name,email,phone,student_id,lab,supervisor,semester,gpa,assigned_courses,weekly_hours,status,join_date,password,default_password,is_password_changed) VALUES
+('Andi Pratama','asslab@app.com','081200000001','DEMO-ASLAB-001','Laboratorium Pemrograman','Prof. Dr. Ahmad Wijaya',7,3.85,3,12,'Aktif',CURRENT_DATE,'password','password',false)
+ON CONFLICT (email) DO UPDATE SET
+  name = EXCLUDED.name,
+  phone = EXCLUDED.phone,
+  student_id = EXCLUDED.student_id,
+  lab = EXCLUDED.lab,
+  supervisor = EXCLUDED.supervisor,
+  semester = EXCLUDED.semester,
+  gpa = EXCLUDED.gpa,
+  assigned_courses = EXCLUDED.assigned_courses,
+  weekly_hours = EXCLUDED.weekly_hours,
+  status = EXCLUDED.status,
+  password = EXCLUDED.password,
+  default_password = EXCLUDED.default_password,
+  is_password_changed = EXCLUDED.is_password_changed,
+  updated_at = CURRENT_TIMESTAMP;
+
+-- <<< 007_admins_and_demo_login_users.up.sql
+
+COMMIT;

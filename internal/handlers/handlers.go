@@ -26,6 +26,12 @@ func Register(r *gin.Engine, h *Handler) {
 		api.GET("/student/courses", h.GetStudentCourses)
 		api.GET("/student/assignments", h.GetAssignments)
 		api.GET("/student/grades", h.GetGrades)
+		api.PUT("/student/assignments/:id/submit", h.SubmitAssignment)
+		api.PUT("/lecturer/grades/students/:id", h.UpdateStudentGrade)
+		api.POST("/lecturer/courses", h.CreateLecturerCourse)
+		api.PUT("/lecturer/courses/:id", h.UpdateLecturerCourse)
+		api.DELETE("/lecturer/courses/:id", h.DeleteLecturerCourse)
+		api.DELETE("/assistant/materials/:id", h.DeleteMaterial)
 
 		api.GET("/admin/courses", h.GetAdminCourses)
 		api.POST("/admin/courses", h.CreateCourse)
@@ -59,6 +65,13 @@ func Register(r *gin.Engine, h *Handler) {
 		api.POST("/admin/classes", h.CreateClass)
 		api.PUT("/admin/classes/:id", h.UpdateClass)
 		api.DELETE("/admin/classes/:id", h.DeleteClass)
+
+		api.POST("/admin/assignments", h.CreateAdminAssignment)
+		api.PUT("/admin/assignments/:id", h.UpdateAdminAssignment)
+		api.DELETE("/admin/assignments/:id", h.DeleteAdminAssignment)
+
+		api.PUT("/assistant/reports/:id/review", h.ReviewAssistantReport)
+		api.PUT("/assistant/submissions/:id/grade", h.ReviewAssistantReport)
 	}
 }
 
@@ -86,6 +99,7 @@ func (h *Handler) GetStudents(c *gin.Context) { data, err := h.repo.Students(); 
 func (h *Handler) GetLecturers(c *gin.Context) { data, err := h.repo.Lecturers(); respond(c, data, err) }
 func (h *Handler) GetAssistants(c *gin.Context) { data, err := h.repo.Assistants(); respond(c, data, err) }
 func (h *Handler) GetClasses(c *gin.Context) { data, err := h.repo.Classes(); respond(c, data, err) }
+func (h *Handler) SubmitAssignment(c *gin.Context) { id,err := pathID(c); if err != nil { return }; var payload models.AssignmentSubmission; if bind(c,&payload){ return }; err = h.repo.SubmitAssignment(id,&payload); payload.ID = id; respond(c,payload,err) }
 
 func (h *Handler) CreateCourse(c *gin.Context) { var payload models.AdminCourse; if bind(c,&payload){ return }; err := h.repo.CreateCourse(&payload); created(c,payload,err) }
 func (h *Handler) UpdateCourse(c *gin.Context) { id,err := pathID(c); if err != nil { return }; var payload models.AdminCourse; if bind(c,&payload){ return }; err = h.repo.UpdateCourse(id,&payload); respond(c,payload,err) }
@@ -113,6 +127,18 @@ func (h *Handler) ResetAssistantPassword(c *gin.Context) { id,err := pathID(c); 
 func (h *Handler) CreateClass(c *gin.Context) { var payload models.ClassData; if bind(c,&payload){ return }; err := h.repo.CreateClass(&payload); created(c,payload,err) }
 func (h *Handler) UpdateClass(c *gin.Context) { id,err := pathID(c); if err != nil { return }; var payload models.ClassData; if bind(c,&payload){ return }; err = h.repo.UpdateClass(id,&payload); respond(c,payload,err) }
 func (h *Handler) DeleteClass(c *gin.Context) { id,err := pathID(c); if err != nil { return }; err = h.repo.DeleteClass(id); respond(c,gin.H{"id":id},err) }
+
+func (h *Handler) CreateLecturerCourse(c *gin.Context) { var payload models.LecturerCourse; if bind(c,&payload){ return }; err := h.repo.CreateLecturerCourse(&payload); created(c,payload,err) }
+func (h *Handler) UpdateLecturerCourse(c *gin.Context) { id,err := pathID(c); if err != nil { return }; var payload models.LecturerCourse; if bind(c,&payload){ return }; err = h.repo.UpdateLecturerCourse(id,&payload); payload.ID = id; respond(c,payload,err) }
+func (h *Handler) DeleteLecturerCourse(c *gin.Context) { id,err := pathID(c); if err != nil { return }; err = h.repo.DeleteLecturerCourse(id); respond(c,gin.H{"id":id},err) }
+
+func (h *Handler) CreateAdminAssignment(c *gin.Context) { var payload models.AdminAssignment; if bind(c,&payload){ return }; err := h.repo.CreateAdminAssignment(&payload); created(c,payload,err) }
+func (h *Handler) UpdateAdminAssignment(c *gin.Context) { id,err := pathID(c); if err != nil { return }; var payload models.AdminAssignment; if bind(c,&payload){ return }; err = h.repo.UpdateAdminAssignment(id,&payload); payload.ID = id; respond(c,payload,err) }
+func (h *Handler) DeleteAdminAssignment(c *gin.Context) { id,err := pathID(c); if err != nil { return }; err = h.repo.DeleteAdminAssignment(id); respond(c,gin.H{"id":id},err) }
+
+func (h *Handler) DeleteMaterial(c *gin.Context) { id,err := pathID(c); if err != nil { return }; err = h.repo.DeleteMaterial(id); respond(c,gin.H{"id":id},err) }
+func (h *Handler) UpdateStudentGrade(c *gin.Context) { id,err := pathID(c); if err != nil { return }; var payload models.StudentGradeUpdate; if bind(c,&payload){ return }; err = h.repo.UpdateStudentGrade(id,&payload); respond(c,payload,err) }
+func (h *Handler) ReviewAssistantReport(c *gin.Context) { id,err := pathID(c); if err != nil { return }; var payload models.ReportReview; if bind(c,&payload){ return }; err = h.repo.ReviewAssistantReport(id,&payload); payload.ID = id; respond(c,payload,err) }
 
 func bind(c *gin.Context, out interface{}) bool { if err := c.ShouldBindJSON(out); err != nil { fail(c, http.StatusBadRequest, err.Error()); return true }; return false }
 func pathID(c *gin.Context) (int,error) { id, err := strconv.Atoi(c.Param("id")); if err != nil { fail(c,http.StatusBadRequest,"invalid id"); return 0, err }; return id,nil }

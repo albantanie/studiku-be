@@ -22,17 +22,11 @@ func (r *Repository) Login(email string, password string) (*models.LoginUser, er
 		FROM (
 			SELECT id, name, email, 'student' AS role, password FROM students
 			UNION ALL
-			SELECT 1 AS id, 'Budi Santoso' AS name, 'mahasiswa@app.com' AS email, 'student' AS role, 'password' AS password
-			UNION ALL
-			SELECT 1 AS id, 'Administrator' AS name, 'admin@app.com' AS email, 'admin' AS role, 'password' AS password
-			UNION ALL
 			SELECT id, name, email, 'lecturer' AS role, password FROM lecturers
-			UNION ALL
-			SELECT 1 AS id, 'Prof. Dr. Ahmad Wijaya' AS name, 'dosen@app.com' AS email, 'lecturer' AS role, 'password' AS password
 			UNION ALL
 			SELECT id, name, email, 'assistant' AS role, password FROM lab_assistants
 			UNION ALL
-			SELECT 1 AS id, 'Andi Pratama' AS name, 'asslab@app.com' AS email, 'assistant' AS role, 'password' AS password
+			SELECT id, name, email, 'admin' AS role, password FROM admins
 		) users
 		WHERE lower(email) = lower($1)
 		AND password = $2
@@ -102,6 +96,11 @@ func (r *Repository) Grades() ([]models.Grade, error) {
 	items := []models.Grade{}
 	for rows.Next() { var g models.Grade; if err := rows.Scan(&g.ID,&g.CourseName,&g.Code,&g.Semester,&g.Credits,&g.Grade,&g.Score,&g.Color); err != nil { return nil, err }; items = append(items, g) }
 	return items, rows.Err()
+}
+
+func (r *Repository) SubmitAssignment(id int, submission *models.AssignmentSubmission) error {
+	_, err := r.db.Exec(`UPDATE assignments SET status='submitted',submitted_date=to_char(CURRENT_DATE,'DD Mon YYYY'),updated_at=now() WHERE id=$1`, id)
+	return err
 }
 
 func (r *Repository) AdminCourses() ([]models.AdminCourse, error) {
@@ -223,5 +222,52 @@ func (r *Repository) Classes() ([]models.ClassData, error) {
 func (r *Repository) CreateClass(c *models.ClassData) error { c.TotalStudents = len(c.Students); return r.db.QueryRow(`INSERT INTO classes (code,name,academic_year,assistant,schedule,room,total_students,capacity,students) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`, c.Code,c.Name,c.AcademicYear,c.Assistant,c.Schedule,c.Room,c.TotalStudents,c.Capacity,pq.Array(c.Students)).Scan(&c.ID) }
 func (r *Repository) UpdateClass(id int, c *models.ClassData) error { c.TotalStudents = len(c.Students); _, err := r.db.Exec(`UPDATE classes SET code=$1,name=$2,academic_year=$3,assistant=$4,schedule=$5,room=$6,total_students=$7,capacity=$8,students=$9,updated_at=now() WHERE id=$10`, c.Code,c.Name,c.AcademicYear,c.Assistant,c.Schedule,c.Room,c.TotalStudents,c.Capacity,pq.Array(c.Students),id); return err }
 func (r *Repository) DeleteClass(id int) error { _, err := r.db.Exec(`DELETE FROM classes WHERE id=$1`, id); return err }
+
+func (r *Repository) CreateLecturerCourse(c *models.LecturerCourse) error {
+	if c.SKS == 0 { c.SKS = 3 }
+	return r.db.QueryRow(`INSERT INTO courses (name,instructor,assistant,study_program,academic_year,class_code,status,day,start_time,end_time,room,sessions,credits,students,description) VALUES ($1,'','', 'Teknik Informatika',$2,$3,'Aktif',$4,'','',$5,14,$6,$7,$8) RETURNING id`, c.Name,c.AcademicYear,c.Code,c.Schedule,c.Room,c.SKS,c.Students,c.Description).Scan(&c.ID)
+}
+
+func (r *Repository) UpdateLecturerCourse(id int, c *models.LecturerCourse) error {
+	if c.SKS == 0 { c.SKS = 3 }
+	_, err := r.db.Exec(`UPDATE courses SET name=$1,academic_year=$2,class_code=$3,day=$4,room=$5,credits=$6,students=$7,description=$8,updated_at=now() WHERE id=$9`, c.Name,c.AcademicYear,c.Code,c.Schedule,c.Room,c.SKS,c.Students,c.Description,id)
+	return err
+}
+
+func (r *Repository) DeleteLecturerCourse(id int) error { _, err := r.db.Exec(`DELETE FROM courses WHERE id=$1`, id); return err }
+
+func (r *Repository) CreateAdminAssignment(a *models.AdminAssignment) error {
+	if a.Type == "" { a.Type = "Tugas" }
+	if a.Status == "" { a.Status = "Aktif" }
+	status := "pending"
+	if a.Status == "Selesai" { status = "graded" }
+	return r.db.QueryRow(`INSERT INTO assignments (title,course,assistant,due_date,due_time,status,course_color,instructor,total_students,submitted,graded,pending,assignment_type) VALUES ($1,$2,$3,$4,'23:59',$5,'bg-blue-500',$6,$7,$8,$9,$10,$11) RETURNING id`, a.Title,a.Course,a.Instructor,a.DueDate,status,a.Instructor,a.TotalStudents,a.Submitted,a.Graded,a.Pending,a.Type).Scan(&a.ID)
+}
+
+func (r *Repository) UpdateAdminAssignment(id int, a *models.AdminAssignment) error {
+	if a.Type == "" { a.Type = "Tugas" }
+	if a.Status == "" { a.Status = "Aktif" }
+	status := "pending"
+	if a.Status == "Selesai" { status = "graded" }
+	_, err := r.db.Exec(`UPDATE assignments SET title=$1,course=$2,assistant=$3,due_date=$4,status=$5,instructor=$6,total_students=$7,submitted=$8,graded=$9,pending=$10,assignment_type=$11,updated_at=now() WHERE id=$12`, a.Title,a.Course,a.Instructor,a.DueDate,status,a.Instructor,a.TotalStudents,a.Submitted,a.Graded,a.Pending,a.Type,id)
+	return err
+}
+
+func (r *Repository) DeleteAdminAssignment(id int) error { _, err := r.db.Exec(`DELETE FROM assignments WHERE id=$1`, id); return err }
+
+func (r *Repository) DeleteMaterial(id int) error { _, err := r.db.Exec(`DELETE FROM course_materials WHERE id=$1`, id); return err }
+
+func (r *Repository) UpdateStudentGrade(id int, g *models.StudentGradeUpdate) error {
+	_, err := r.db.Exec(`UPDATE lecturer_student_grades SET tugas1=$1,tugas2=$2,tugas3=$3,ujian_akhir=$4,nilai_akhir=$5,grade=$6 WHERE id=$7`, g.Tugas1,g.Tugas2,g.Tugas3,g.UjianAkhir,g.NilaiAkhir,g.Grade,id)
+	return err
+}
+
+func (r *Repository) ReviewAssistantReport(id int, review *models.ReportReview) error {
+	if review.Status == "" {
+		review.Status = "Disetujui"
+	}
+	_, err := r.db.Exec(`UPDATE assistant_reports SET score=$1,status=$2 WHERE id=$3`, review.Score, review.Status, id)
+	return err
+}
 
 func SQLPlaceholders(n int) string { p:=make([]string,n); for i:=range p { p[i]=fmt.Sprintf("$%d", i+1) }; return strings.Join(p, ",") }

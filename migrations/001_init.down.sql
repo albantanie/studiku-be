@@ -1,8 +1,0 @@
-DROP TABLE IF EXISTS classes;
-DROP TABLE IF EXISTS lab_assistants;
-DROP TABLE IF EXISTS lecturers;
-DROP TABLE IF EXISTS students;
-DROP TABLE IF EXISTS grades;
-DROP TABLE IF EXISTS assignments;
-DROP TABLE IF EXISTS courses;
-DROP TABLE IF EXISTS academic_years;
