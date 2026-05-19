@@ -220,3 +220,13 @@ type AssignmentSubmission struct {
 	Answer   string `json:"answer"`
 	FileName string `json:"fileName"`
 }
+
+type ReportWorkflowItem struct {
+	CourseID  int    `json:"courseId"`
+	Status    string `json:"status"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+type ReportWorkflowAction struct {
+	CourseID int `json:"courseId" binding:"required"`
+}

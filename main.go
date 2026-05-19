@@ -31,6 +31,17 @@ func main() {
 		printUsage()
 	case "purge":
 		runSQL("scripts/purge.sql")
+	case "init":
+		if len(os.Args) >= 3 && os.Args[2] == "demo" {
+			runSQLSequence(
+				"scripts/purge.sql",
+				"scripts/migrate_seed.sql",
+				"scripts/keep_demo_accounts_only.sql",
+			)
+			return
+		}
+		fmt.Printf("unknown command: %s\n\n", strings.Join(os.Args[1:], " "))
+		printUsage()
 	default:
 		fmt.Printf("unknown command: %s\n\n", os.Args[1])
 		printUsage()
@@ -42,6 +53,7 @@ func printUsage() {
 	fmt.Println("  go run main.go rest          Start the Gin REST API server")
 	fmt.Println("  go run main.go migrate seed  Create schema and seed data")
 	fmt.Println("  go run main.go purge         Drop all public database tables")
+	fmt.Println("  go run main.go init demo     Fresh init DB, keep only 4 demo login accounts")
 }
 
 func runREST() {
@@ -80,6 +92,23 @@ func runSQL(path string) {
 	}
 
 	log.Printf("executed %s", path)
+}
+
+func runSQLSequence(paths ...string) {
+	cfg := config.Load()
+
+	db, err := database.Connect(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer db.Close()
+
+	for _, path := range paths {
+		if err := database.RunSQLFile(db, path); err != nil {
+			log.Fatalf("failed executing %s: %v", path, err)
+		}
+		log.Printf("executed %s", path)
+	}
 }
 
 func cors(allowedOrigins string) gin.HandlerFunc {
