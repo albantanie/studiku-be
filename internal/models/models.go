@@ -37,6 +37,7 @@ type StudentCourse struct {
 	Lecturer   string            `json:"lecturer"`
 	Tutor      string            `json:"tutor"`
 	Schedule   Schedule          `json:"schedule"`
+	Room       string            `json:"room"`
 	Attendance AttendanceSummary `json:"attendance"`
 	Color      string            `json:"color"`
 }
@@ -157,16 +158,16 @@ type LabAssistant struct {
 }
 
 type ClassData struct {
-	ID            int    `json:"id"`
-	Code          string `json:"code" binding:"required"`
-	Name          string `json:"name" binding:"required"`
-	AcademicYear  string `json:"academicYear" binding:"required"`
-	Assistant     string `json:"assistant"`
-	Schedule      string `json:"schedule"`
-	Room          string `json:"room"`
-	TotalStudents int    `json:"totalStudents"`
-	Capacity      int    `json:"capacity" binding:"required,min=1"`
-	Students      []int  `json:"students"`
+	ID            int     `json:"id"`
+	Code          string  `json:"code" binding:"required"`
+	Name          string  `json:"name" binding:"required"`
+	AcademicYear  string  `json:"academicYear" binding:"required"`
+	Assistant     string  `json:"assistant"`
+	Schedule      string  `json:"schedule"`
+	Room          string  `json:"room"`
+	TotalStudents int     `json:"totalStudents"`
+	Capacity      int     `json:"capacity" binding:"required,min=1"`
+	Students      []int64 `json:"students"`
 }
 
 type LecturerCourse struct {
@@ -210,7 +211,7 @@ type StudentGradeUpdate struct {
 
 type ReportReview struct {
 	ID       int    `json:"id"`
-	Score    int    `json:"score" binding:"required,min=0,max=100"`
+	Score    int    `json:"score" binding:"min=0,max=100"`
 	Status   string `json:"status"`
 	Feedback string `json:"feedback"`
 }
@@ -229,4 +230,16 @@ type ReportWorkflowItem struct {
 
 type ReportWorkflowAction struct {
 	CourseID int `json:"courseId" binding:"required"`
+}
+
+type AttendanceRecordInput struct {
+	ID     int    `json:"id"`
+	NIM    string `json:"nim" binding:"required"`
+	Name   string `json:"name" binding:"required"`
+	Status string `json:"status" binding:"required"`
+	Time   string `json:"time"`
+}
+
+type AssistantAttendanceUpdate struct {
+	Records []AttendanceRecordInput `json:"records" binding:"required"`
 }

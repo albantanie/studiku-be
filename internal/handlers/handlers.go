@@ -81,6 +81,10 @@ func Register(r *gin.Engine, h *Handler) {
 
 		api.PUT("/assistant/reports/:id/review", h.ReviewAssistantReport)
 		api.PUT("/assistant/submissions/:id/grade", h.ReviewAssistantReport)
+		api.PUT("/assistant/attendance/sessions/:id", h.UpdateAssistantAttendanceSession)
+		api.POST("/assistant/sessions/:id/reports", h.SubmitAssistantSessionReport)
+		api.PUT("/lecturer/reports/:id/approve", h.ApproveAssistantReport)
+		api.PUT("/lecturer/reports/:id/reject", h.RejectAssistantReport)
 		api.GET("/reports/workflow", h.GetReportWorkflow)
 		api.POST("/reports/workflow/submit", h.SubmitReportWorkflow)
 		api.POST("/reports/workflow/approve", h.ApproveReportWorkflow)
@@ -439,6 +443,28 @@ func (h *Handler) ReviewAssistantReport(c *gin.Context) {
 	payload.ID = id
 	respond(c, payload, err)
 }
+func (h *Handler) SubmitAssistantSessionReport(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	report, err := h.repo.SubmitAssistantSessionReport(id)
+	respond(c, report, err)
+}
+func (h *Handler) ApproveAssistantReport(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	respond(c, gin.H{"id": id}, h.repo.SetAssistantReportStatus(id, "Disetujui"))
+}
+func (h *Handler) RejectAssistantReport(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	respond(c, gin.H{"id": id}, h.repo.SetAssistantReportStatus(id, "Ditolak"))
+}
 func (h *Handler) GetReportWorkflow(c *gin.Context) {
 	data, err := h.repo.ReportWorkflow()
 	respond(c, data, err)
@@ -474,6 +500,18 @@ func (h *Handler) ResetReportWorkflow(c *gin.Context) {
 	}
 	err := h.repo.UpsertReportWorkflow(payload.CourseID, "DRAFT")
 	respond(c, payload, err)
+}
+
+func (h *Handler) UpdateAssistantAttendanceSession(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	var payload models.AssistantAttendanceUpdate
+	if bind(c, &payload) {
+		return
+	}
+	respond(c, payload, h.repo.UpdateAssistantAttendanceSession(id, &payload))
 }
 
 func bind(c *gin.Context, out interface{}) bool {

@@ -147,12 +147,12 @@ ON CONFLICT (id) DO NOTHING;
 SELECT setval('academic_years_id_seq', (SELECT COALESCE(MAX(id), 1) FROM academic_years));
 
 INSERT INTO courses (id,name,instructor,assistant,study_program,academic_year,class_code,status,day,start_time,end_time,room,sessions,credits,students,attendance_present,attendance_total,color) VALUES
-(1,'Algoritma & Struktur Data','Dr. Ahmad Rahman','Andi Prasetyo, S.Kom','Teknik Informatika','2025/2026','CS301','Aktif','Senin & Kamis','08:00','10:00','Lab 301',14,4,35,10,12,'bg-blue-500'),
-(2,'Basis Data Lanjutan','Prof. Siti Nurhaliza','Budi Santoso, M.Kom','Teknik Informatika','2025/2026','CS302','Aktif','Selasa','10:00','13:00','Ruang 402',14,3,142,12,12,'bg-blue-500'),
-(3,'Pemrograman Web','Ir. Budi Hartono','Dewi Lestari, S.Kom','Teknik Informatika','Genap 2024/2025','TI-201','Aktif','Rabu & Jumat','13:00','15:00','Lab Komputer 1',14,3,156,11,12,'bg-blue-500'),
-(4,'Jaringan Komputer','Dr. Rina Kusuma','Eko Wijaya, M.T','Teknik Informatika','Genap 2024/2025','CS304','Aktif','Kamis','15:00','18:00','Lab 304',14,3,138,9,12,'bg-blue-500'),
-(5,'Rekayasa Perangkat Lunak','Prof. Agus Setiawan','Fina Marlina, S.Kom','Teknik Informatika','Genap 2024/2025','TI-305','Aktif','Selasa','08:00','10:00','Ruang 402',12,3,124,12,12,'bg-blue-500')
-ON CONFLICT (id) DO NOTHING;
+(1,'Algoritma & Struktur Data','Dr. Ahmad Rahman','Rama Dhani','Teknik Informatika','2025/2026','CS301','Aktif','Senin & Kamis','08:00','10:00','Lab 301',14,4,35,10,12,'bg-blue-500'),
+(2,'Basis Data Lanjutan','Prof. Siti Nurhaliza','Dina Amelia','Teknik Informatika','2025/2026','CS302','Aktif','Selasa','10:00','13:00','Ruang 402',14,3,38,12,12,'bg-blue-500'),
+(3,'Pemrograman Web','Ir. Budi Hartono','Rama Dhani','Teknik Informatika','Genap 2024/2025','TI-201','Aktif','Rabu & Jumat','13:00','15:00','Lab Komputer 1',14,3,40,11,12,'bg-blue-500'),
+(4,'Jaringan Komputer','Dr. Rina Kusuma','Fahmi Akbar','Teknik Informatika','Genap 2024/2025','CS304','Aktif','Kamis','15:00','18:00','Lab 304',14,3,32,9,12,'bg-blue-500'),
+(5,'Rekayasa Perangkat Lunak','Prof. Agus Setiawan','Rama Dhani','Teknik Informatika','Genap 2024/2025','TI-305','Aktif','Selasa','08:00','10:00','Ruang 402',12,3,28,12,12,'bg-blue-500')
+ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,instructor=EXCLUDED.instructor,assistant=EXCLUDED.assistant,study_program=EXCLUDED.study_program,academic_year=EXCLUDED.academic_year,class_code=EXCLUDED.class_code,status=EXCLUDED.status,day=EXCLUDED.day,start_time=EXCLUDED.start_time,end_time=EXCLUDED.end_time,room=EXCLUDED.room,sessions=EXCLUDED.sessions,credits=EXCLUDED.credits,students=EXCLUDED.students,attendance_present=EXCLUDED.attendance_present,attendance_total=EXCLUDED.attendance_total,color=EXCLUDED.color;
 SELECT setval('courses_id_seq', (SELECT COALESCE(MAX(id), 1) FROM courses));
 
 INSERT INTO assignments (id,title,course,assistant,due_date,due_time,status,course_color,submitted_date,score) VALUES
@@ -201,12 +201,12 @@ ON CONFLICT (id) DO NOTHING;
 SELECT setval('lab_assistants_id_seq', (SELECT COALESCE(MAX(id), 1) FROM lab_assistants));
 
 INSERT INTO classes (id,code,name,academic_year,assistant,schedule,room,total_students,capacity,students) VALUES
-(1,'A1','Pemrograman Dasar','2024/2025','Ahmad Fauzi','Senin, 08:00 - 10:00','Lab 301',35,40,ARRAY[1,2,3,4,5]),
-(2,'A2','Struktur Data','2024/2025','Siti Nurhaliza','Selasa, 10:00 - 12:00','Lab 302',38,40,ARRAY[6,7]),
-(3,'B1','Basis Data','2024/2025','Budi Setiawan','Rabu, 13:00 - 15:00','Lab 303',32,40,ARRAY[]::int[]),
-(4,'B2','Pemrograman Web','2024/2025','Dewi Kartika','Kamis, 08:00 - 10:00','Lab 304',40,40,ARRAY[]::int[]),
-(5,'C1','Kecerdasan Buatan','2024/2025','Eko Prasetyo','Jumat, 10:00 - 12:00','Lab 305',28,35,ARRAY[]::int[])
-ON CONFLICT (id) DO NOTHING;
+(1,'CS301','Algoritma & Struktur Data','2025/2026','Rama Dhani','Senin & Kamis, 08:00 - 10:00','Lab 301',35,40,ARRAY[1,2,3,4,5]),
+(2,'CS302','Basis Data Lanjutan','2025/2026','Dina Amelia','Selasa, 10:00 - 13:00','Ruang 402',38,40,ARRAY[6,7]),
+(3,'TI-201','Pemrograman Web','Genap 2024/2025','Rama Dhani','Rabu & Jumat, 13:00 - 15:00','Lab Komputer 1',40,40,ARRAY[]::int[]),
+(4,'CS304','Jaringan Komputer','Genap 2024/2025','Fahmi Akbar','Kamis, 15:00 - 18:00','Lab 304',32,40,ARRAY[]::int[]),
+(5,'TI-305','Rekayasa Perangkat Lunak','Genap 2024/2025','Rama Dhani','Selasa, 08:00 - 10:00','Ruang 402',28,35,ARRAY[]::int[])
+ON CONFLICT (id) DO UPDATE SET code=EXCLUDED.code,name=EXCLUDED.name,academic_year=EXCLUDED.academic_year,assistant=EXCLUDED.assistant,schedule=EXCLUDED.schedule,room=EXCLUDED.room,total_students=EXCLUDED.total_students,capacity=EXCLUDED.capacity,students=EXCLUDED.students;
 SELECT setval('classes_id_seq', (SELECT COALESCE(MAX(id), 1) FROM classes));
 
 -- <<< 002_seed.up.sql
@@ -422,10 +422,25 @@ INSERT INTO import_lecturer_preview_courses (lecturer_email, course_name, sort_o
 ('imported@university.ac.id','Imported Course 1',1),('imported@university.ac.id','Imported Course 2',2)
 ON CONFLICT DO NOTHING;
 
-INSERT INTO course_sessions (id,course_id,session_number,title,topic,session_date,session_time,session_type,conference_link,room,description) VALUES
-(1,1,1,'Sesi 1','Pengenalan Algoritma','8 Jan 2026','08:00 - 10:00','offline',NULL,'Lab 301','Pertemuan pertama membahas konsep dasar algoritma.'),
-(2,1,2,'Sesi 2','Kompleksitas Algoritma','11 Jan 2026','08:00 - 10:00','online','https://meet.google.com/abc-defg-hij','Lab 301','Analisis kompleksitas waktu dan ruang.'),
-(3,1,3,'Sesi 3','Sorting - Bubble & Selection','15 Jan 2026','08:00 - 10:00','offline',NULL,'Lab 301','Implementasi sorting dasar.')
+INSERT INTO course_sessions (course_id,session_number,title,topic,session_date,session_time,session_type,conference_link,room,description)
+SELECT
+  c.id,
+  n,
+  'Sesi ' || n,
+  CASE
+    WHEN n = 1 THEN 'Pengenalan ' || c.name
+    WHEN n = 2 THEN 'Konfigurasi ' || c.name
+    WHEN n = 3 THEN 'Praktikum ' || c.name
+    ELSE 'Pertemuan ' || n || ' - ' || c.name
+  END,
+  to_char(DATE '2026-01-08' + ((n - 1) * INTERVAL '7 days'), 'YYYY-MM-DD'),
+  CASE WHEN c.start_time = '' AND c.end_time = '' THEN c.day ELSE c.start_time || ' - ' || c.end_time END,
+  'offline',
+  NULL,
+  c.room,
+  'Sesi otomatis dari konfigurasi jumlah sesi kursus admin.'
+FROM courses c
+CROSS JOIN generate_series(1, c.sessions) AS gs(n)
 ON CONFLICT (course_id,session_number) DO UPDATE SET title=EXCLUDED.title, topic=EXCLUDED.topic, session_date=EXCLUDED.session_date, session_time=EXCLUDED.session_time, session_type=EXCLUDED.session_type, conference_link=EXCLUDED.conference_link, room=EXCLUDED.room, description=EXCLUDED.description;
 SELECT setval('course_sessions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM course_sessions));
 
@@ -443,20 +458,20 @@ INSERT INTO session_assignments (id,course_id,session_id,title,description,due_d
 (1,1,NULL,'Implementasi Bubble Sort','','20 Jan 2026','submitted',95,32,35),
 (2,1,NULL,'Analisis Quick Sort','','27 Jan 2026','submitted',88,30,35),
 (3,1,NULL,'Binary Search Tree','','10 Feb 2026','pending',NULL,0,35),
-(4,1,1,'Latihan - Analisis Kompleksitas','','15 Jan 2026, 23:59','pending',NULL,0,35),
-(5,1,1,'Quiz - Pengenalan Algoritma','','17 Jan 2026, 23:59','submitted',NULL,30,35),
-(6,1,1,'Praktikum 1: Implementasi Algoritma Dasar','Buat program sederhana.','15 Jan 2026, 23:59','pending',NULL,32,35)
+(4,1,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'Latihan - Analisis Kompleksitas','','15 Jan 2026, 23:59','pending',NULL,0,35),
+(5,1,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=2),'Quiz - Pengenalan Algoritma','','17 Jan 2026, 23:59','submitted',NULL,30,35),
+(6,1,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=3),'Praktikum 1: Implementasi Algoritma Dasar','Buat program sederhana.','15 Jan 2026, 23:59','pending',NULL,32,35)
 ON CONFLICT (id) DO UPDATE SET course_id=EXCLUDED.course_id, session_id=EXCLUDED.session_id, title=EXCLUDED.title, description=EXCLUDED.description, due_date=EXCLUDED.due_date, status=EXCLUDED.status, score=EXCLUDED.score, submitted_count=EXCLUDED.submitted_count, total_students=EXCLUDED.total_students;
 SELECT setval('session_assignments_id_seq', (SELECT COALESCE(MAX(id), 1) FROM session_assignments));
 
 INSERT INTO attendance_sessions (id,role_scope,course_code,course_name,class_name,session_number,session_date,session_time,room,lab,topic,total_students,present,absent,sick,permit,excused,status,assistant_status,assistant_check_in_time) VALUES
-(1,'lecturer','TIF101','Pemrograman Dasar','TIF-A',1,'2025-01-13','08:00 - 10:00','Lab 301','','Perulangan dan Fungsi',35,32,1,1,1,0,'Selesai','',''),
-(2,'lecturer','TIF102','Struktur Data','TIF-B',1,'2025-01-08','08:00 - 10:00','Lab 302','','Binary Search Tree',38,35,2,1,0,0,'Selesai','',''),
-(3,'lecturer','TIF201','Basis Data','TIF-C',1,'2025-01-10','08:00 - 10:00','Lab 303','','Query SQL Lanjutan',32,30,1,0,1,0,'Selesai','',''),
-(4,'assistant','TIF101','Pemrograman Dasar','TIF-A',1,'2025-01-13','14:00 - 16:00','','Lab 301','Perulangan dan Fungsi',35,32,1,1,1,0,'Selesai','',''),
-(5,'assistant','TIF102','Struktur Data','TIF-B',1,'2025-01-08','14:00 - 16:00','','Lab 302','Binary Search Tree',38,35,2,1,0,0,'Selesai','',''),
-(6,'assistant','TIF201','Basis Data','TIF-C',1,'2025-01-10','14:00 - 16:00','','Lab 303','Query SQL Lanjutan',32,30,1,0,1,0,'Selesai','',''),
-(7,'admin','TIF101','Pemrograman Dasar','A1',1,'2025-01-06','08:00 - 10:00','Lab 301','','Pengenalan Pemrograman',35,33,1,0,0,1,'Selesai','Hadir','07:55')
+(1,'lecturer','CS301','Algoritma & Struktur Data','CS301',1,'2026-01-08','08:00 - 10:00','Lab 301','','Pengenalan Algoritma',35,32,1,1,1,0,'Selesai','',''),
+(2,'lecturer','CS302','Basis Data Lanjutan','CS302',1,'2026-01-08','10:00 - 13:00','Ruang 402','','Normalisasi Database',38,35,2,1,0,0,'Selesai','',''),
+(3,'lecturer','TI-201','Pemrograman Web','TI-201',1,'2026-01-08','13:00 - 15:00','Lab Komputer 1','','REST API',40,30,9,0,1,0,'Selesai','',''),
+(4,'assistant','CS301','Algoritma & Struktur Data','CS301',1,'2026-01-08','08:00 - 10:00','','Lab 301','Pengenalan Algoritma',35,32,1,1,1,0,'Selesai','Hadir','07:55'),
+(5,'assistant','CS302','Basis Data Lanjutan','CS302',1,'2026-01-08','10:00 - 13:00','','Ruang 402','Normalisasi Database',38,35,2,1,0,0,'Selesai','Hadir','09:55'),
+(6,'assistant','CS304','Jaringan Komputer','CS304',1,'2026-01-08','15:00 - 18:00','','Lab 304','Routing Dasar',32,30,1,0,1,0,'Selesai','Hadir','14:55'),
+(7,'admin','CS301','Algoritma & Struktur Data','CS301',1,'2026-01-08','08:00 - 10:00','Lab 301','','Pengenalan Algoritma',35,33,1,0,0,1,'Selesai','Hadir','07:55')
 ON CONFLICT (id) DO UPDATE SET role_scope=EXCLUDED.role_scope, course_code=EXCLUDED.course_code, course_name=EXCLUDED.course_name, class_name=EXCLUDED.class_name, session_number=EXCLUDED.session_number, session_date=EXCLUDED.session_date, session_time=EXCLUDED.session_time, room=EXCLUDED.room, lab=EXCLUDED.lab, topic=EXCLUDED.topic, total_students=EXCLUDED.total_students, present=EXCLUDED.present, absent=EXCLUDED.absent, sick=EXCLUDED.sick, permit=EXCLUDED.permit, excused=EXCLUDED.excused, status=EXCLUDED.status, assistant_status=EXCLUDED.assistant_status, assistant_check_in_time=EXCLUDED.assistant_check_in_time;
 SELECT setval('attendance_sessions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM attendance_sessions));
 
@@ -481,9 +496,9 @@ ON CONFLICT (id) DO UPDATE SET grade_course_id=EXCLUDED.grade_course_id,nim=EXCL
 SELECT setval('lecturer_student_grades_id_seq', (SELECT COALESCE(MAX(id), 1) FROM lecturer_student_grades));
 
 INSERT INTO assistant_practical_courses (id,course_code,name,lecturer,class_name,lab,day,start_time,end_time,semester,academic_year,students,attendance_present,attendance_total,color) VALUES
-(1,'TIF101','Pemrograman Dasar','Dr. Ahmad Rahman','TIF-A','Lab 301','Senin','14:00','16:00','Ganjil','2025/2026',35,12,14,'bg-blue-500'),
-(2,'TIF102','Struktur Data','Prof. Siti Nurhaliza','TIF-B','Lab 302','Rabu','14:00','16:00','Ganjil','2025/2026',38,13,14,'bg-blue-500'),
-(3,'TIF201','Basis Data','Dr. Budi Santoso','TIF-C','Lab 303','Jumat','14:00','16:00','Ganjil','2025/2026',32,30,35,'bg-blue-500')
+(1,'CS301','Algoritma & Struktur Data','Dr. Ahmad Rahman','CS301','Lab 301','Senin & Kamis','08:00','10:00','Ganjil','2025/2026',35,12,14,'bg-blue-500'),
+(2,'CS302','Basis Data Lanjutan','Prof. Siti Nurhaliza','CS302','Ruang 402','Selasa','10:00','13:00','Ganjil','2025/2026',38,13,14,'bg-blue-500'),
+(3,'CS304','Jaringan Komputer','Dr. Rina Kusuma','CS304','Lab 304','Kamis','15:00','18:00','Ganjil','2025/2026',32,12,14,'bg-blue-500')
 ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,lecturer=EXCLUDED.lecturer,class_name=EXCLUDED.class_name,lab=EXCLUDED.lab,day=EXCLUDED.day,start_time=EXCLUDED.start_time,end_time=EXCLUDED.end_time,semester=EXCLUDED.semester,academic_year=EXCLUDED.academic_year,students=EXCLUDED.students,attendance_present=EXCLUDED.attendance_present,attendance_total=EXCLUDED.attendance_total,color=EXCLUDED.color;
 SELECT setval('assistant_practical_courses_id_seq', (SELECT COALESCE(MAX(id), 1) FROM assistant_practical_courses));
 
@@ -493,14 +508,16 @@ ON CONFLICT (id) DO UPDATE SET task=EXCLUDED.task,submitted=EXCLUDED.submitted,t
 SELECT setval('assistant_tasks_id_seq', (SELECT COALESCE(MAX(id), 1) FROM assistant_tasks));
 
 INSERT INTO assistant_reports (id,nim,name,course_code,course_name,class_name,week,topic,submitted_at,status,score,file_name,file_size) VALUES
-(1,'210101001','Ahmad Fauzi','TIF101','Pemrograman Dasar','TIF-A',5,'Array dan Matrix','2025-01-13 15:45','Menunggu Review',NULL,'Laporan_Array_Ahmad.pdf','2.4 MB'),
-(2,'210101002','Siti Nurhaliza','TIF101','Pemrograman Dasar','TIF-A',5,'Array dan Matrix','2025-01-13 15:30','Disetujui',90,'Laporan_Array_Siti.pdf','1.8 MB')
-ON CONFLICT (id) DO UPDATE SET status=EXCLUDED.status,score=EXCLUDED.score;
+(1,'TI2021001','Rama Dhani','CS301','Algoritma & Struktur Data','CS301',1,'Pengenalan Algoritma','2026-01-08 10:15','Menunggu Review',NULL,'Laporan Sesi 1 - Algoritma & Struktur Data.pdf','2.4 MB'),
+(2,'TI2021002','Dina Amelia','CS302','Basis Data Lanjutan','CS302',1,'Normalisasi Database','2026-01-08 13:15','Disetujui',90,'Laporan Sesi 1 - Basis Data Lanjutan.pdf','1.8 MB'),
+(3,'TI2021003','Fahmi Akbar','CS304','Jaringan Komputer','CS304',1,'Routing Dasar','2026-01-08 18:15','Ditolak',NULL,'Laporan Sesi 1 - Jaringan Komputer.pdf','2.1 MB')
+ON CONFLICT (id) DO UPDATE SET nim=EXCLUDED.nim,name=EXCLUDED.name,course_code=EXCLUDED.course_code,course_name=EXCLUDED.course_name,class_name=EXCLUDED.class_name,week=EXCLUDED.week,topic=EXCLUDED.topic,submitted_at=EXCLUDED.submitted_at,status=EXCLUDED.status,score=EXCLUDED.score,file_name=EXCLUDED.file_name,file_size=EXCLUDED.file_size;
 SELECT setval('assistant_reports_id_seq', (SELECT COALESCE(MAX(id), 1) FROM assistant_reports));
 
 INSERT INTO assistant_report_summary (id,course_code,course_name,class_name,total_reports,reviewed,pending,approved,needs_revision) VALUES
-(1,'TIF101','Pemrograman Dasar','TIF-A',35,28,7,25,3),
-(2,'TIF102','Struktur Data','TIF-B',38,32,6,30,2)
+(1,'CS301','Algoritma & Struktur Data','CS301',1,0,1,0,0),
+(2,'CS302','Basis Data Lanjutan','CS302',1,1,0,1,0),
+(3,'CS304','Jaringan Komputer','CS304',1,1,0,0,1)
 ON CONFLICT (id) DO UPDATE SET total_reports=EXCLUDED.total_reports,reviewed=EXCLUDED.reviewed,pending=EXCLUDED.pending,approved=EXCLUDED.approved,needs_revision=EXCLUDED.needs_revision;
 SELECT setval('assistant_report_summary_id_seq', (SELECT COALESCE(MAX(id), 1) FROM assistant_report_summary));
 
