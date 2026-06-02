@@ -14,20 +14,24 @@ func (r *Repository) ImportStudents(students []models.Student) error {
 
 	for _, s := range students {
 		password := s.Password
-		if password == "" {
-			password = "password"
-		}
 		defaultPassword := s.DefaultPassword
 		if defaultPassword == "" {
-			defaultPassword = "password"
+			defaultPassword = generateDefaultPassword()
+		}
+		if password == "" {
+			password = defaultPassword
+		}
+		hashedPassword, err := ensurePasswordHash(password)
+		if err != nil {
+			return err
 		}
 
-		_, err := tx.Exec(
+		_, err = tx.Exec(
 			`INSERT INTO students (name,email,password,default_password,student_id,program,semester,courses,status,join_date,is_password_changed)
 			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE(NULLIF($9,''),'Aktif'),CURRENT_DATE,$10)`,
 			s.Name,
 			s.Email,
-			password,
+			hashedPassword,
 			defaultPassword,
 			s.StudentID,
 			s.Program,

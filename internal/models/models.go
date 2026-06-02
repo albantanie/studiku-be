@@ -17,6 +17,19 @@ type LoginUser struct {
 	Name  string `json:"name"`
 	Email string `json:"email"`
 	Role  string `json:"role"`
+	Token string `json:"token"`
+}
+
+type AuthUser struct {
+	ID    int
+	Email string
+	Role  string
+}
+
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"currentPassword" binding:"required"`
+	NewPassword     string `json:"newPassword" binding:"required,min=6"`
+	ConfirmPassword string `json:"confirmPassword" binding:"required"`
 }
 
 type Schedule struct {
@@ -86,7 +99,7 @@ type Grade struct {
 type AdminCourse struct {
 	ID           int    `json:"id"`
 	Name         string `json:"name" binding:"required"`
-	Instructor   string `json:"instructor" binding:"required"`
+	Instructor   string `json:"instructor"`
 	Assistant    string `json:"assistant" binding:"required"`
 	StudyProgram string `json:"studyProgram" binding:"required"`
 	AcademicYear string `json:"academicYear" binding:"required"`
@@ -143,10 +156,11 @@ type LabAssistant struct {
 	Name              string  `json:"name" binding:"required"`
 	Email             string  `json:"email" binding:"required,email"`
 	Phone             string  `json:"phone"`
-	StudentID         string  `json:"studentId" binding:"required"`
-	Lab               string  `json:"lab" binding:"required"`
+	StudentID         string  `json:"studentId"`
+	Role              string  `json:"role"`
+	Lab               string  `json:"lab"`
 	Supervisor        string  `json:"supervisor"`
-	Semester          int     `json:"semester" binding:"required,min=1"`
+	Semester          int     `json:"semester"`
 	GPA               float64 `json:"gpa"`
 	AssignedCourses   int     `json:"assignedCourses"`
 	WeeklyHours       int     `json:"weeklyHours"`
@@ -214,6 +228,7 @@ type ReportReview struct {
 	Score    int    `json:"score" binding:"min=0,max=100"`
 	Status   string `json:"status"`
 	Feedback string `json:"feedback"`
+	Note     string `json:"note"`
 }
 
 type AssignmentSubmission struct {
@@ -242,4 +257,56 @@ type AttendanceRecordInput struct {
 
 type AssistantAttendanceUpdate struct {
 	Records []AttendanceRecordInput `json:"records" binding:"required"`
+}
+
+type SessionAssignment struct {
+	ID             int    `json:"id"`
+	CourseID       int    `json:"courseId"`
+	SessionID      int    `json:"sessionId" binding:"required"`
+	Title          string `json:"title" binding:"required"`
+	Description    string `json:"description"`
+	Deadline       string `json:"deadline" binding:"required"`
+	Status         string `json:"status"`
+	SubmittedCount int    `json:"submittedCount"`
+	TotalStudents  int    `json:"totalStudents"`
+	SessionNumber  int    `json:"sessionNumber"`
+}
+
+type MaterialItem struct {
+	ID          int    `json:"id"`
+	CourseID    int    `json:"courseId"`
+	SessionID   *int   `json:"sessionId,omitempty"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Type        string `json:"type"`
+	Size        string `json:"size"`
+	UploadDate  string `json:"uploadDate"`
+	Status      string `json:"status"`
+	FileURL     string `json:"fileUrl"`
+	CourseName  string `json:"courseName"`
+	CreatedBy   *int   `json:"createdBy,omitempty"`
+}
+
+type ReportItem struct {
+	ID             int    `json:"id"`
+	CourseID       *int   `json:"courseId,omitempty"`
+	NIM            string `json:"nim"`
+	Name           string `json:"name"`
+	CourseCode     string `json:"courseCode"`
+	CourseName     string `json:"courseName"`
+	Class          string `json:"class"`
+	Week           int    `json:"week"`
+	Topic          string `json:"topic"`
+	SubmittedAt    string `json:"submittedAt"`
+	Status         string `json:"status"`
+	Score          *int   `json:"score,omitempty"`
+	FileName       string `json:"fileName"`
+	FileSize       string `json:"fileSize"`
+	FileURL        string `json:"fileUrl"`
+	RejectionNote  string `json:"rejectionNote"`
+	ReturnedToRole string `json:"returnedToRole"`
+}
+
+type ReportActionRequest struct {
+	Note string `json:"note"`
 }

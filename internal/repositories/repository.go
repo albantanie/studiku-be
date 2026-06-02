@@ -1,13 +1,16 @@
 package repositories
 
 import (
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
+	"math/big"
 	"strings"
 	"time"
 
 	"github.com/lib/pq"
+	"golang.org/x/crypto/bcrypt"
 	"studi-ku-backend/internal/models"
 )
 
@@ -17,22 +20,21 @@ func New(db *sql.DB) *Repository { return &Repository{db: db} }
 
 func (r *Repository) Login(email string, password string) (*models.LoginUser, error) {
 	var user models.LoginUser
+	var storedPassword string
 
 	err := r.db.QueryRow(`
-		SELECT id, name, email, role
+		SELECT id, name, email, role, password
 		FROM (
 			SELECT id, name, email, 'student' AS role, password FROM students
 			UNION ALL
-			SELECT id, name, email, 'lecturer' AS role, password FROM lecturers
-			UNION ALL
-			SELECT id, name, email, 'assistant' AS role, password FROM lab_assistants
+			SELECT id, name, email, COALESCE(NULLIF(role,''), 'aslab') AS role, password
+			FROM lab_assistants
 			UNION ALL
 			SELECT id, name, email, 'admin' AS role, password FROM admins
 		) users
 		WHERE lower(email) = lower($1)
-		AND password = $2
 		LIMIT 1
-	`, email, password).Scan(&user.ID, &user.Name, &user.Email, &user.Role)
+	`, email).Scan(&user.ID, &user.Name, &user.Email, &user.Role, &storedPassword)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, sql.ErrNoRows
@@ -40,8 +42,100 @@ func (r *Repository) Login(email string, password string) (*models.LoginUser, er
 	if err != nil {
 		return nil, err
 	}
+	if !passwordMatches(storedPassword, password) {
+		return nil, sql.ErrNoRows
+	}
+	if !strings.HasPrefix(storedPassword, "$2a$") && !strings.HasPrefix(storedPassword, "$2b$") && !strings.HasPrefix(storedPassword, "$2y$") {
+		if hashed, err := hashPassword(password); err == nil {
+			_ = r.setPassword(user.ID, user.Role, hashed, true)
+		}
+	}
 
 	return &user, nil
+}
+
+func passwordMatches(storedPassword, password string) bool {
+	if strings.HasPrefix(storedPassword, "$2a$") || strings.HasPrefix(storedPassword, "$2b$") || strings.HasPrefix(storedPassword, "$2y$") {
+		return bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(password)) == nil
+	}
+	return storedPassword == password
+}
+
+func hashPassword(password string) (string, error) {
+	hashed, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	return string(hashed), err
+}
+
+func ensurePasswordHash(password string) (string, error) {
+	if strings.HasPrefix(password, "$2a$") || strings.HasPrefix(password, "$2b$") || strings.HasPrefix(password, "$2y$") {
+		return password, nil
+	}
+	return hashPassword(password)
+}
+
+func generateDefaultPassword() string {
+	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+	out := make([]byte, 10)
+	for i := range out {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(chars))))
+		if err != nil {
+			return "StudiKu" + time.Now().Format("150405000")
+		}
+		out[i] = chars[n.Int64()]
+	}
+	return string(out)
+}
+
+func (r *Repository) UserExists(id int, email, role string) bool {
+	table := tableForRole(role)
+	if table == "" {
+		return false
+	}
+	var exists bool
+	if err := r.db.QueryRow(`SELECT EXISTS (SELECT 1 FROM `+table+` WHERE id=$1 AND lower(email)=lower($2))`, id, email).Scan(&exists); err != nil {
+		return false
+	}
+	return exists
+}
+
+func tableForRole(role string) string {
+	switch role {
+	case "student":
+		return "students"
+	case "admin":
+		return "admins"
+	case "aslab", "laboran", "kalab":
+		return "lab_assistants"
+	}
+	return ""
+}
+
+func (r *Repository) setPassword(id int, role string, password string, changed bool) error {
+	table := tableForRole(role)
+	if table == "" {
+		return sql.ErrNoRows
+	}
+	_, err := r.db.Exec(`UPDATE `+table+` SET password=$1,is_password_changed=$2,updated_at=now() WHERE id=$3`, password, changed, id)
+	return err
+}
+
+func (r *Repository) ChangePassword(id int, role string, currentPassword string, newPassword string) error {
+	table := tableForRole(role)
+	if table == "" {
+		return sql.ErrNoRows
+	}
+	var storedPassword string
+	if err := r.db.QueryRow(`SELECT password FROM `+table+` WHERE id=$1`, id).Scan(&storedPassword); err != nil {
+		return err
+	}
+	if !passwordMatches(storedPassword, currentPassword) {
+		return errors.New("password lama tidak sesuai")
+	}
+	hashed, err := hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	return r.setPassword(id, role, hashed, true)
 }
 
 func (r *Repository) Dashboard() (map[string]interface{}, error) {
@@ -179,7 +273,7 @@ func (r *Repository) AdminCourses() ([]models.AdminCourse, error) {
 
 func (r *Repository) CreateCourse(c *models.AdminCourse) error {
 	c.Students = r.classStudentCount(c.ClassCode)
-	if err := r.db.QueryRow(`INSERT INTO courses (name,instructor,assistant,study_program,academic_year,class_code,status,day,start_time,end_time,room,sessions,credits,students) VALUES ($1,$2,$3,$4,$5,$6,COALESCE(NULLIF($7,''),'Aktif'),$8,$9,$10,$11,$12,$13,$14) RETURNING id`, c.Name, c.Instructor, c.Assistant, c.StudyProgram, c.AcademicYear, c.ClassCode, c.Status, c.Day, c.StartTime, c.EndTime, c.Room, c.Sessions, c.Credits, c.Students).Scan(&c.ID); err != nil {
+	if err := r.db.QueryRow(`INSERT INTO courses (name,instructor,assistant,study_program,academic_year,class_code,status,day,start_time,end_time,room,sessions,credits,students) VALUES ($1,COALESCE(NULLIF($2,''),'-'),$3,$4,$5,$6,COALESCE(NULLIF($7,''),'Aktif'),$8,$9,$10,$11,$12,$13,$14) RETURNING id`, c.Name, c.Instructor, c.Assistant, c.StudyProgram, c.AcademicYear, c.ClassCode, c.Status, c.Day, c.StartTime, c.EndTime, c.Room, c.Sessions, c.Credits, c.Students).Scan(&c.ID); err != nil {
 		return err
 	}
 	if err := r.syncCourseSessions(c.ID); err != nil {
@@ -191,7 +285,7 @@ func (r *Repository) UpdateCourse(id int, c *models.AdminCourse) error {
 	c.Students = r.classStudentCount(c.ClassCode)
 	var oldAssistant string
 	_ = r.db.QueryRow(`SELECT assistant FROM courses WHERE id=$1`, id).Scan(&oldAssistant)
-	if _, err := r.db.Exec(`UPDATE courses SET name=$1,instructor=$2,assistant=$3,study_program=$4,academic_year=$5,class_code=$6,status=$7,day=$8,start_time=$9,end_time=$10,room=$11,sessions=$12,credits=$13,students=$14,updated_at=now() WHERE id=$15`, c.Name, c.Instructor, c.Assistant, c.StudyProgram, c.AcademicYear, c.ClassCode, c.Status, c.Day, c.StartTime, c.EndTime, c.Room, c.Sessions, c.Credits, c.Students, id); err != nil {
+	if _, err := r.db.Exec(`UPDATE courses SET name=$1,instructor=COALESCE(NULLIF($2,''),'-'),assistant=$3,study_program=$4,academic_year=$5,class_code=$6,status=$7,day=$8,start_time=$9,end_time=$10,room=$11,sessions=$12,credits=$13,students=$14,updated_at=now() WHERE id=$15`, c.Name, c.Instructor, c.Assistant, c.StudyProgram, c.AcademicYear, c.ClassCode, c.Status, c.Day, c.StartTime, c.EndTime, c.Room, c.Sessions, c.Credits, c.Students, id); err != nil {
 		return err
 	}
 	if err := r.syncCourseSessions(id); err != nil {
@@ -305,7 +399,14 @@ func (r *Repository) DeleteCourse(id int) error {
 }
 
 func (r *Repository) AcademicYears() ([]models.AcademicYear, error) {
-	rows, err := r.db.Query(`SELECT id,name,start_date::text,end_date::text,semester,status,total_courses,total_students FROM academic_years ORDER BY start_date DESC`)
+	rows, err := r.db.Query(`
+		SELECT
+			ay.id,ay.name,ay.start_date::text,ay.end_date::text,ay.semester,ay.status,
+			(SELECT count(*) FROM courses c WHERE c.academic_year=ay.name) AS total_courses,
+			COALESCE((SELECT sum(cardinality(cls.students))::int FROM classes cls WHERE cls.academic_year=ay.name), 0) AS total_students
+		FROM academic_years ay
+		ORDER BY ay.start_date DESC
+	`)
 	if err != nil {
 		return nil, err
 	}
@@ -344,20 +445,38 @@ func (r *Repository) Students() ([]models.Student, error) {
 		if err := rows.Scan(&s.ID, &s.Name, &s.Email, &s.Password, &s.DefaultPassword, &s.StudentID, &s.Program, &s.Semester, pq.Array(&s.Courses), &s.Status, &s.JoinDate, &s.IsPasswordChanged); err != nil {
 			return nil, err
 		}
+		s.Password = ""
+		s.DefaultPassword = ""
 		items = append(items, s)
 	}
 	return items, rows.Err()
 }
 func (r *Repository) CreateStudent(s *models.Student) error {
 	if s.DefaultPassword == "" {
-		s.DefaultPassword = "password"
+		s.DefaultPassword = generateDefaultPassword()
 	}
 	if s.Password == "" {
-		s.Password = "password"
+		s.Password = s.DefaultPassword
 	}
+	hashed, err := hashPassword(s.Password)
+	if err != nil {
+		return err
+	}
+	s.Password = hashed
 	return r.db.QueryRow(`INSERT INTO students (name,email,password,default_password,student_id,program,semester,courses,status,join_date,is_password_changed) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE(NULLIF($9,''),'Aktif'),COALESCE(NULLIF($10,'')::date,CURRENT_DATE),$11) RETURNING id`, s.Name, s.Email, s.Password, s.DefaultPassword, s.StudentID, s.Program, s.Semester, pq.Array(s.Courses), s.Status, s.JoinDate, s.IsPasswordChanged).Scan(&s.ID)
 }
 func (r *Repository) UpdateStudent(id int, s *models.Student) error {
+	if s.Password == "" {
+		if err := r.db.QueryRow(`SELECT password FROM students WHERE id=$1`, id).Scan(&s.Password); err != nil {
+			return err
+		}
+	} else {
+		hashed, err := ensurePasswordHash(s.Password)
+		if err != nil {
+			return err
+		}
+		s.Password = hashed
+	}
 	_, err := r.db.Exec(`UPDATE students SET name=$1,email=$2,password=$3,default_password=$4,student_id=$5,program=$6,semester=$7,courses=$8,status=$9,join_date=$10,is_password_changed=$11,updated_at=now() WHERE id=$12`, s.Name, s.Email, s.Password, s.DefaultPassword, s.StudentID, s.Program, s.Semester, pq.Array(s.Courses), s.Status, s.JoinDate, s.IsPasswordChanged, id)
 	return err
 }
@@ -366,7 +485,15 @@ func (r *Repository) DeleteStudent(id int) error {
 	return err
 }
 func (r *Repository) ResetStudentPassword(id int) (*models.Student, error) {
-	_, err := r.db.Exec(`UPDATE students SET password=default_password,is_password_changed=false,updated_at=now() WHERE id=$1`, id)
+	var defaultPassword string
+	if err := r.db.QueryRow(`SELECT default_password FROM students WHERE id=$1`, id).Scan(&defaultPassword); err != nil {
+		return nil, err
+	}
+	hashed, err := hashPassword(defaultPassword)
+	if err != nil {
+		return nil, err
+	}
+	_, err = r.db.Exec(`UPDATE students SET password=$1,is_password_changed=false,updated_at=now() WHERE id=$2`, hashed, id)
 	if err != nil {
 		return nil, err
 	}
@@ -394,25 +521,40 @@ func (r *Repository) Lecturers() ([]models.Lecturer, error) {
 		if err := rows.Scan(&x.ID, &x.Name, &x.Email, &x.Password, &x.DefaultPassword, &x.NIDN, pq.Array(&x.Courses), &x.IsPasswordChanged); err != nil {
 			return nil, err
 		}
+		x.Password = ""
+		x.DefaultPassword = ""
 		items = append(items, x)
 	}
 	return items, rows.Err()
 }
 func (r *Repository) CreateLecturer(x *models.Lecturer) error {
 	if x.DefaultPassword == "" {
-		x.DefaultPassword = "password"
+		x.DefaultPassword = generateDefaultPassword()
 	}
 	if x.Password == "" {
 		x.Password = x.DefaultPassword
 	}
+	hashed, err := hashPassword(x.Password)
+	if err != nil {
+		return err
+	}
+	x.Password = hashed
 	return r.db.QueryRow(`INSERT INTO lecturers (name,email,password,default_password,nidn,courses,is_password_changed) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`, x.Name, x.Email, x.Password, x.DefaultPassword, x.NIDN, pq.Array(x.Courses), x.IsPasswordChanged).Scan(&x.ID)
 }
 func (r *Repository) UpdateLecturer(id int, x *models.Lecturer) error {
 	if x.DefaultPassword == "" {
-		x.DefaultPassword = "password"
+		x.DefaultPassword = generateDefaultPassword()
 	}
 	if x.Password == "" {
-		x.Password = x.DefaultPassword
+		if err := r.db.QueryRow(`SELECT password FROM lecturers WHERE id=$1`, id).Scan(&x.Password); err != nil {
+			return err
+		}
+	} else {
+		hashed, err := ensurePasswordHash(x.Password)
+		if err != nil {
+			return err
+		}
+		x.Password = hashed
 	}
 	_, err := r.db.Exec(`UPDATE lecturers SET name=$1,email=$2,password=$3,default_password=$4,nidn=$5,courses=$6,is_password_changed=$7,updated_at=now() WHERE id=$8`, x.Name, x.Email, x.Password, x.DefaultPassword, x.NIDN, pq.Array(x.Courses), x.IsPasswordChanged, id)
 	return err
@@ -422,7 +564,15 @@ func (r *Repository) DeleteLecturer(id int) error {
 	return err
 }
 func (r *Repository) ResetLecturerPassword(id int) (*models.Lecturer, error) {
-	_, err := r.db.Exec(`UPDATE lecturers SET password=default_password,is_password_changed=false,updated_at=now() WHERE id=$1`, id)
+	var defaultPassword string
+	if err := r.db.QueryRow(`SELECT default_password FROM lecturers WHERE id=$1`, id).Scan(&defaultPassword); err != nil {
+		return nil, err
+	}
+	hashed, err := hashPassword(defaultPassword)
+	if err != nil {
+		return nil, err
+	}
+	_, err = r.db.Exec(`UPDATE lecturers SET password=$1,is_password_changed=false,updated_at=now() WHERE id=$2`, hashed, id)
 	if err != nil {
 		return nil, err
 	}
@@ -441,7 +591,7 @@ func (r *Repository) ResetLecturerPassword(id int) (*models.Lecturer, error) {
 func (r *Repository) Assistants() ([]models.LabAssistant, error) {
 	rows, err := r.db.Query(`
 		SELECT
-			la.id,la.name,la.email,la.phone,la.student_id,la.lab,la.supervisor,la.semester,la.gpa,
+			la.id,la.name,la.email,la.phone,la.student_id,COALESCE(NULLIF(la.role,''),'aslab'),la.lab,la.supervisor,la.semester,la.gpa,
 			(SELECT count(*) FROM courses c WHERE c.assistant = la.name) AS assigned_courses,
 			la.weekly_hours,la.status,la.join_date::text,la.password,la.default_password,la.is_password_changed
 		FROM lab_assistants la
@@ -454,34 +604,73 @@ func (r *Repository) Assistants() ([]models.LabAssistant, error) {
 	items := []models.LabAssistant{}
 	for rows.Next() {
 		var x models.LabAssistant
-		if err := rows.Scan(&x.ID, &x.Name, &x.Email, &x.Phone, &x.StudentID, &x.Lab, &x.Supervisor, &x.Semester, &x.GPA, &x.AssignedCourses, &x.WeeklyHours, &x.Status, &x.JoinDate, &x.Password, &x.DefaultPassword, &x.IsPasswordChanged); err != nil {
+		if err := rows.Scan(&x.ID, &x.Name, &x.Email, &x.Phone, &x.StudentID, &x.Role, &x.Lab, &x.Supervisor, &x.Semester, &x.GPA, &x.AssignedCourses, &x.WeeklyHours, &x.Status, &x.JoinDate, &x.Password, &x.DefaultPassword, &x.IsPasswordChanged); err != nil {
 			return nil, err
 		}
+		x.Password = ""
+		x.DefaultPassword = ""
 		items = append(items, x)
 	}
 	return items, rows.Err()
 }
 func (r *Repository) CreateAssistant(x *models.LabAssistant) error {
 	if x.DefaultPassword == "" {
-		x.DefaultPassword = "password"
+		x.DefaultPassword = generateDefaultPassword()
 	}
 	if x.Password == "" {
 		x.Password = x.DefaultPassword
 	}
+	if x.Role == "" {
+		x.Role = "aslab"
+	}
+	if strings.TrimSpace(x.StudentID) == "" {
+		x.StudentID = strings.ToUpper(x.Role) + "-" + strings.ReplaceAll(strings.ToLower(x.Email), "@", "-")
+	}
+	if strings.TrimSpace(x.Lab) == "" {
+		x.Lab = "Umum"
+	}
+	if x.Semester < 1 {
+		x.Semester = 1
+	}
+	hashed, err := ensurePasswordHash(x.Password)
+	if err != nil {
+		return err
+	}
+	x.Password = hashed
 	x.AssignedCourses = r.assistantCourseCount(x.Name)
-	return r.db.QueryRow(`INSERT INTO lab_assistants (name,email,phone,student_id,lab,supervisor,semester,gpa,assigned_courses,weekly_hours,status,join_date,password,default_password,is_password_changed) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,COALESCE(NULLIF($11,''),'Aktif'),COALESCE(NULLIF($12,'')::date,CURRENT_DATE),$13,$14,$15) RETURNING id`, x.Name, x.Email, x.Phone, x.StudentID, x.Lab, x.Supervisor, x.Semester, x.GPA, x.AssignedCourses, x.WeeklyHours, x.Status, x.JoinDate, x.Password, x.DefaultPassword, x.IsPasswordChanged).Scan(&x.ID)
+	return r.db.QueryRow(`INSERT INTO lab_assistants (name,email,phone,student_id,role,lab,supervisor,semester,gpa,assigned_courses,weekly_hours,status,join_date,password,default_password,is_password_changed) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,COALESCE(NULLIF($12,''),'Aktif'),COALESCE(NULLIF($13,'')::date,CURRENT_DATE),$14,$15,$16) RETURNING id`, x.Name, x.Email, x.Phone, x.StudentID, x.Role, x.Lab, x.Supervisor, x.Semester, x.GPA, x.AssignedCourses, x.WeeklyHours, x.Status, x.JoinDate, x.Password, x.DefaultPassword, x.IsPasswordChanged).Scan(&x.ID)
 }
 func (r *Repository) UpdateAssistant(id int, x *models.LabAssistant) error {
 	if x.DefaultPassword == "" {
-		x.DefaultPassword = "password"
+		x.DefaultPassword = generateDefaultPassword()
 	}
 	if x.Password == "" {
-		x.Password = x.DefaultPassword
+		if err := r.db.QueryRow(`SELECT password FROM lab_assistants WHERE id=$1`, id).Scan(&x.Password); err != nil {
+			return err
+		}
+	} else {
+		hashed, err := ensurePasswordHash(x.Password)
+		if err != nil {
+			return err
+		}
+		x.Password = hashed
+	}
+	if x.Role == "" {
+		x.Role = "aslab"
+	}
+	if strings.TrimSpace(x.StudentID) == "" {
+		x.StudentID = strings.ToUpper(x.Role) + "-" + strings.ReplaceAll(strings.ToLower(x.Email), "@", "-")
+	}
+	if strings.TrimSpace(x.Lab) == "" {
+		x.Lab = "Umum"
+	}
+	if x.Semester < 1 {
+		x.Semester = 1
 	}
 	var oldName string
 	_ = r.db.QueryRow(`SELECT name FROM lab_assistants WHERE id=$1`, id).Scan(&oldName)
 	x.AssignedCourses = r.assistantCourseCount(x.Name)
-	if _, err := r.db.Exec(`UPDATE lab_assistants SET name=$1,email=$2,phone=$3,student_id=$4,lab=$5,supervisor=$6,semester=$7,gpa=$8,assigned_courses=$9,weekly_hours=$10,status=$11,join_date=$12,password=$13,default_password=$14,is_password_changed=$15,updated_at=now() WHERE id=$16`, x.Name, x.Email, x.Phone, x.StudentID, x.Lab, x.Supervisor, x.Semester, x.GPA, x.AssignedCourses, x.WeeklyHours, x.Status, x.JoinDate, x.Password, x.DefaultPassword, x.IsPasswordChanged, id); err != nil {
+	if _, err := r.db.Exec(`UPDATE lab_assistants SET name=$1,email=$2,phone=$3,student_id=$4,role=$5,lab=$6,supervisor=$7,semester=$8,gpa=$9,assigned_courses=$10,weekly_hours=$11,status=$12,join_date=$13,password=$14,default_password=$15,is_password_changed=$16,updated_at=now() WHERE id=$17`, x.Name, x.Email, x.Phone, x.StudentID, x.Role, x.Lab, x.Supervisor, x.Semester, x.GPA, x.AssignedCourses, x.WeeklyHours, x.Status, x.JoinDate, x.Password, x.DefaultPassword, x.IsPasswordChanged, id); err != nil {
 		return err
 	}
 	if oldName != "" && oldName != x.Name {
@@ -504,7 +693,15 @@ func (r *Repository) DeleteAssistant(id int) error {
 	return err
 }
 func (r *Repository) ResetAssistantPassword(id int) (*models.LabAssistant, error) {
-	_, err := r.db.Exec(`UPDATE lab_assistants SET password=default_password,is_password_changed=false,updated_at=now() WHERE id=$1`, id)
+	var defaultPassword string
+	if err := r.db.QueryRow(`SELECT default_password FROM lab_assistants WHERE id=$1`, id).Scan(&defaultPassword); err != nil {
+		return nil, err
+	}
+	hashed, err := hashPassword(defaultPassword)
+	if err != nil {
+		return nil, err
+	}
+	_, err = r.db.Exec(`UPDATE lab_assistants SET password=$1,is_password_changed=false,updated_at=now() WHERE id=$2`, hashed, id)
 	if err != nil {
 		return nil, err
 	}
@@ -626,8 +823,87 @@ func (r *Repository) DeleteAdminAssignment(id int) error {
 }
 
 func (r *Repository) DeleteMaterial(id int) error {
-	_, err := r.db.Exec(`DELETE FROM course_materials WHERE id=$1`, id)
+	_, err := r.db.Exec(`UPDATE course_materials SET status='deleted',deleted_at=now() WHERE id=$1`, id)
 	return err
+}
+
+func (r *Repository) MaterialsForRole(role string, userID int) ([]models.MaterialItem, error) {
+	where := `m.deleted_at IS NULL`
+	args := []interface{}{}
+	if role != "aslab" {
+		where += ` AND m.status IN ('submitted','available')`
+	}
+	rows, err := r.db.Query(`
+		SELECT m.id,m.course_id,m.session_id,m.title,m.description,m.material_type,m.size,m.upload_date,m.status,
+			m.file_path,c.name,m.created_by
+		FROM course_materials m
+		JOIN courses c ON c.id=m.course_id
+		WHERE `+where+`
+		ORDER BY m.id DESC
+	`, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []models.MaterialItem{}
+	for rows.Next() {
+		var item models.MaterialItem
+		if err := rows.Scan(&item.ID, &item.CourseID, &item.SessionID, &item.Title, &item.Description, &item.Type, &item.Size, &item.UploadDate, &item.Status, &item.FileURL, &item.CourseName, &item.CreatedBy); err != nil {
+			return nil, err
+		}
+		item.FileURL = "/api/materials/" + fmt.Sprint(item.ID) + "/file"
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *Repository) CreateMaterial(courseID int, sessionID *int, title string, description string, filePath string, size string, createdBy int) (*models.MaterialItem, error) {
+	var item models.MaterialItem
+	err := r.db.QueryRow(`
+		INSERT INTO course_materials (course_id,session_id,title,description,material_type,size,upload_date,status,file_path,created_by)
+		VALUES ($1,$2,$3,$4,'PDF',$5,to_char(CURRENT_DATE,'YYYY-MM-DD'),'draft',$6,$7)
+		RETURNING id
+	`, courseID, sessionID, title, description, size, filePath, createdBy).Scan(&item.ID)
+	if err != nil {
+		return nil, err
+	}
+	items, err := r.MaterialsForRole("aslab", createdBy)
+	if err != nil {
+		return nil, err
+	}
+	for _, x := range items {
+		if x.ID == item.ID {
+			return &x, nil
+		}
+	}
+	return nil, sql.ErrNoRows
+}
+
+func (r *Repository) SubmitMaterial(id int, userID int) error {
+	result, err := r.db.Exec(`UPDATE course_materials SET status='submitted',submitted_at=now() WHERE id=$1 AND deleted_at IS NULL`, id)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (r *Repository) MaterialFilePath(id int, role string) (string, error) {
+	query := `SELECT file_path FROM course_materials WHERE id=$1 AND deleted_at IS NULL`
+	if role != "aslab" {
+		query += ` AND status IN ('submitted','available')`
+	}
+	var path string
+	if err := r.db.QueryRow(query, id).Scan(&path); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(path) == "" {
+		return "", sql.ErrNoRows
+	}
+	return path, nil
 }
 
 func (r *Repository) syncAssistantAttendanceSessions() error {
@@ -641,12 +917,12 @@ func (r *Repository) syncAssistantAttendanceSessions() error {
 			c.class_code,
 			c.name,
 			c.class_code,
-			1,
-			to_char(CURRENT_DATE,'YYYY-MM-DD'),
-			CASE WHEN c.start_time = '' AND c.end_time = '' THEN c.day ELSE c.start_time || ' - ' || c.end_time END,
+			cs.session_number,
+			cs.session_date,
+			cs.session_time,
 			'',
 			c.room,
-			COALESCE(NULLIF(c.description,''), c.name),
+			cs.topic,
 			COALESCE(cardinality(cls.students), c.students, 0),
 			0,
 			COALESCE(cardinality(cls.students), c.students, 0),
@@ -657,6 +933,7 @@ func (r *Repository) syncAssistantAttendanceSessions() error {
 			'',
 			''
 		FROM courses c
+		JOIN course_sessions cs ON cs.course_id = c.id
 		LEFT JOIN classes cls ON cls.code = c.class_code
 		WHERE EXISTS (SELECT 1 FROM lab_assistants la WHERE la.name = c.assistant)
 			AND NOT EXISTS (
@@ -664,7 +941,7 @@ func (r *Repository) syncAssistantAttendanceSessions() error {
 				FROM attendance_sessions s
 				WHERE s.role_scope = 'assistant'
 					AND s.course_code = c.class_code
-					AND s.session_number = 1
+					AND s.session_number = cs.session_number
 			)
 	`); err != nil {
 		return err
@@ -738,6 +1015,138 @@ func (r *Repository) UpdateAssistantAttendanceSession(id int, payload *models.As
 	return tx.Commit()
 }
 
+func (r *Repository) UpdateCourseSessionAttendance(courseSessionID int, payload *models.AssistantAttendanceUpdate) error {
+	attendanceSessionID, err := r.ensureAttendanceSessionForCourseSession(courseSessionID)
+	if err != nil {
+		return err
+	}
+	return r.UpdateAssistantAttendanceSession(attendanceSessionID, payload)
+}
+
+func (r *Repository) ensureAttendanceSessionForCourseSession(courseSessionID int) (int, error) {
+	var attendanceSessionID int
+	err := r.db.QueryRow(`
+		WITH src AS (
+			SELECT
+				cs.id,
+				cs.session_number,
+				cs.session_date,
+				cs.session_time,
+				cs.topic,
+				c.class_code,
+				c.name course_name,
+				c.room,
+				COALESCE(cardinality(cls.students), c.students, 0) total_students
+			FROM course_sessions cs
+			JOIN courses c ON c.id = cs.course_id
+			LEFT JOIN classes cls ON cls.code = c.class_code
+			WHERE cs.id = $1
+		), existing AS (
+			SELECT s.id
+			FROM attendance_sessions s
+			JOIN src ON src.class_code = s.course_code AND src.session_number = s.session_number
+			WHERE s.role_scope='assistant'
+			LIMIT 1
+		), inserted AS (
+			INSERT INTO attendance_sessions (
+				role_scope,course_code,course_name,class_name,session_number,session_date,session_time,room,lab,topic,
+				total_students,present,absent,sick,permit,excused,status,assistant_status,assistant_check_in_time
+			)
+			SELECT
+				'assistant', class_code, course_name, class_code, session_number, session_date, session_time, '', room, topic,
+				total_students, 0, total_students, 0, 0, 0, 'Belum Presensi', '', ''
+			FROM src
+			WHERE NOT EXISTS (SELECT 1 FROM existing)
+			RETURNING id
+		)
+		SELECT id FROM inserted
+		UNION ALL
+		SELECT id FROM existing
+		LIMIT 1
+	`, courseSessionID).Scan(&attendanceSessionID)
+	if err != nil {
+		return 0, err
+	}
+
+	_, err = r.db.Exec(`
+		INSERT INTO attendance_records (session_id,nim,name,status,attendance_time,check_in_time)
+		SELECT s.id, st.student_id, st.name, 'Alpa', '', ''
+		FROM attendance_sessions s
+		JOIN classes cls ON cls.code = s.course_code
+		JOIN students st ON st.id = ANY(cls.students)
+		WHERE s.id=$1
+			AND NOT EXISTS (SELECT 1 FROM attendance_records r WHERE r.session_id=s.id)
+		ORDER BY st.id
+	`, attendanceSessionID)
+	return attendanceSessionID, err
+}
+
+func (r *Repository) CreateSessionAssignment(a *models.SessionAssignment) error {
+	if strings.TrimSpace(a.Title) == "" {
+		return errors.New("judul tugas wajib diisi")
+	}
+	if strings.TrimSpace(a.Deadline) == "" {
+		return errors.New("deadline tugas wajib diisi")
+	}
+	err := r.db.QueryRow(`
+		INSERT INTO session_assignments (course_id,session_id,title,description,due_date,status,total_students)
+		SELECT cs.course_id, cs.id, $1, COALESCE($2,''), $3, 'pending', COALESCE(cardinality(cls.students), c.students, 0)
+		FROM course_sessions cs
+		JOIN courses c ON c.id=cs.course_id
+		LEFT JOIN classes cls ON cls.code=c.class_code
+		WHERE cs.id=$4
+		RETURNING id, course_id
+	`, a.Title, a.Description, a.Deadline, a.SessionID).Scan(&a.ID, &a.CourseID)
+	if err != nil {
+		return err
+	}
+	return r.loadSessionAssignment(a.ID, a)
+}
+
+func (r *Repository) UpdateSessionAssignment(id int, a *models.SessionAssignment) error {
+	if strings.TrimSpace(a.Title) == "" {
+		return errors.New("judul tugas wajib diisi")
+	}
+	if strings.TrimSpace(a.Deadline) == "" {
+		return errors.New("deadline tugas wajib diisi")
+	}
+	result, err := r.db.Exec(`
+		UPDATE session_assignments
+		SET title=$1, description=COALESCE($2,''), due_date=$3
+		WHERE id=$4
+	`, a.Title, a.Description, a.Deadline, id)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return r.loadSessionAssignment(id, a)
+}
+
+func (r *Repository) DeleteSessionAssignment(id int) error {
+	result, err := r.db.Exec(`DELETE FROM session_assignments WHERE id=$1`, id)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (r *Repository) loadSessionAssignment(id int, a *models.SessionAssignment) error {
+	return r.db.QueryRow(`
+		SELECT sa.id, sa.course_id, COALESCE(sa.session_id,0), sa.title, sa.description, sa.due_date,
+			sa.status, sa.submitted_count, sa.total_students, COALESCE(cs.session_number,0)
+		FROM session_assignments sa
+		LEFT JOIN course_sessions cs ON cs.id=sa.session_id
+		WHERE sa.id=$1
+	`, id).Scan(&a.ID, &a.CourseID, &a.SessionID, &a.Title, &a.Description, &a.Deadline, &a.Status, &a.SubmittedCount, &a.TotalStudents, &a.SessionNumber)
+}
+
 func normalizeAttendanceStatus(status string) string {
 	switch status {
 	case "Hadir", "Sakit", "Izin":
@@ -760,6 +1169,114 @@ func (r *Repository) ReviewAssistantReport(id int, review *models.ReportReview) 
 	return err
 }
 
+func (r *Repository) AssistantReportsForRole(role string, userID int) ([]models.ReportItem, error) {
+	where := `1=1`
+	switch role {
+	case "aslab":
+		where = `1=1`
+	case "laboran":
+		where = `status IN ('submitted_to_laboran','rejected_by_kalab','Menunggu Review')`
+	case "kalab":
+		where = `status IN ('submitted_to_kalab','approved_by_laboran','Disetujui')`
+	case "admin":
+		where = `1=1`
+	}
+	rows, err := r.db.Query(`
+		SELECT id,course_id,nim,name,course_code,course_name,class_name,week,topic,submitted_at,status,score,
+			file_name,file_size,file_path,rejection_note,returned_to_role
+		FROM assistant_reports
+		WHERE ` + where + `
+		ORDER BY id DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []models.ReportItem{}
+	for rows.Next() {
+		var item models.ReportItem
+		if err := rows.Scan(&item.ID, &item.CourseID, &item.NIM, &item.Name, &item.CourseCode, &item.CourseName, &item.Class, &item.Week, &item.Topic, &item.SubmittedAt, &item.Status, &item.Score, &item.FileName, &item.FileSize, &item.FileURL, &item.RejectionNote, &item.ReturnedToRole); err != nil {
+			return nil, err
+		}
+		item.FileURL = "/api/reports/" + fmt.Sprint(item.ID) + "/file"
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func (r *Repository) ReportFilePath(id int, role string) (string, error) {
+	var path string
+	if err := r.db.QueryRow(`SELECT file_path FROM assistant_reports WHERE id=$1`, id).Scan(&path); err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(path) == "" {
+		return "", sql.ErrNoRows
+	}
+	return path, nil
+}
+
+func (r *Repository) ApproveReportByRole(id int, role string, userID int) error {
+	switch role {
+	case "laboran":
+		_, err := r.db.Exec(`
+			UPDATE assistant_reports
+			SET status='submitted_to_kalab',
+				laboran_approved_by=$1,
+				laboran_approved_at=now(),
+				submitted_to_kalab_at=now(),
+				rejection_note='',
+				returned_to_role=''
+			WHERE id=$2
+		`, userID, id)
+		return err
+	case "kalab":
+		_, err := r.db.Exec(`
+			UPDATE assistant_reports
+			SET status='completed',
+				kalab_approved_by=$1,
+				kalab_approved_at=now(),
+				rejection_note='',
+				returned_to_role=''
+			WHERE id=$2
+		`, userID, id)
+		return err
+	default:
+		return errors.New("role tidak berhak approve laporan")
+	}
+}
+
+func (r *Repository) RejectReportByRole(id int, role string, userID int, note string) error {
+	if strings.TrimSpace(note) == "" {
+		return errors.New("catatan penolakan wajib diisi")
+	}
+	switch role {
+	case "laboran":
+		_, err := r.db.Exec(`
+			UPDATE assistant_reports
+			SET status='rejected_by_laboran',
+				rejected_by=$1,
+				rejected_at=now(),
+				rejection_note=$2,
+				returned_to_role='aslab'
+			WHERE id=$3
+		`, userID, note, id)
+		return err
+	case "kalab":
+		_, err := r.db.Exec(`
+			UPDATE assistant_reports
+			SET status='rejected_by_kalab',
+				rejected_by=$1,
+				rejected_at=now(),
+				rejection_note=$2,
+				returned_to_role='laboran'
+			WHERE id=$3
+		`, userID, note, id)
+		return err
+	default:
+		return errors.New("role tidak berhak tolak laporan")
+	}
+}
+
 func (r *Repository) SubmitAssistantSessionReport(sessionID int) (map[string]interface{}, error) {
 	var reportID int
 	err := r.db.QueryRow(`
@@ -773,8 +1290,9 @@ func (r *Repository) SubmitAssistantSessionReport(sessionID int) (map[string]int
 			WHERE cs.id = $1
 		), upsert AS (
 			UPDATE assistant_reports ar
-			SET status='Menunggu Review',
+			SET status='submitted_to_laboran',
 				submitted_at=to_char(now(),'YYYY-MM-DD HH24:MI'),
+				submitted_to_laboran_at=now(),
 				topic=src.topic,
 				file_name='Laporan Sesi ' || src.session_number || ' - ' || src.course_name || '.pdf',
 				file_size='-'
@@ -784,8 +1302,8 @@ func (r *Repository) SubmitAssistantSessionReport(sessionID int) (map[string]int
 				AND ar.name=src.assistant_name
 			RETURNING ar.id
 		)
-		INSERT INTO assistant_reports (nim,name,course_code,course_name,class_name,week,topic,submitted_at,status,score,file_name,file_size)
-		SELECT nim,assistant_name,class_code,course_name,class_name,session_number,topic,to_char(now(),'YYYY-MM-DD HH24:MI'),'Menunggu Review',NULL,'Laporan Sesi ' || session_number || ' - ' || course_name || '.pdf','-'
+		INSERT INTO assistant_reports (course_id,nim,name,course_code,course_name,class_name,week,topic,submitted_at,status,score,file_name,file_size,submitted_to_laboran_at)
+		SELECT (SELECT course_id FROM course_sessions WHERE id=$1),nim,assistant_name,class_code,course_name,class_name,session_number,topic,to_char(now(),'YYYY-MM-DD HH24:MI'),'submitted_to_laboran',NULL,'Laporan Sesi ' || session_number || ' - ' || course_name || '.pdf','-',now()
 		FROM src
 		WHERE NOT EXISTS (SELECT 1 FROM upsert)
 		RETURNING id
@@ -804,7 +1322,7 @@ func (r *Repository) SubmitAssistantSessionReport(sessionID int) (map[string]int
 	if err != nil {
 		return nil, err
 	}
-	return map[string]interface{}{"id": reportID, "status": "Menunggu Review"}, nil
+	return map[string]interface{}{"id": reportID, "status": "submitted_to_laboran"}, nil
 }
 
 func (r *Repository) SetAssistantReportStatus(id int, status string) error {

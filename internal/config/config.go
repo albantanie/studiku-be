@@ -15,6 +15,7 @@ type Config struct {
 	DBSSLMode      string
 	ServerPort     string
 	AllowedOrigins string
+	UploadDir      string
 }
 
 func Load() *Config {
@@ -29,6 +30,7 @@ func Load() *Config {
 		DBSSLMode:      getEnv("DB_SSLMODE", "disable"),
 		ServerPort:     getEnv("SERVER_PORT", "8080"),
 		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
+		UploadDir:      getEnv("UPLOAD_DIR", "uploads"),
 	}
 }
 

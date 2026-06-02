@@ -105,6 +105,7 @@ CREATE TABLE IF NOT EXISTS lab_assistants (
   email VARCHAR(255) NOT NULL UNIQUE,
   phone VARCHAR(50) NOT NULL DEFAULT '',
   student_id VARCHAR(50) NOT NULL UNIQUE,
+  role VARCHAR(30) NOT NULL DEFAULT 'aslab',
   lab VARCHAR(255) NOT NULL,
   supervisor VARCHAR(255) NOT NULL DEFAULT '',
   semester INT NOT NULL DEFAULT 1,
@@ -119,6 +120,8 @@ CREATE TABLE IF NOT EXISTS lab_assistants (
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE lab_assistants ADD COLUMN IF NOT EXISTS role VARCHAR(30) NOT NULL DEFAULT 'aslab';
 
 CREATE TABLE IF NOT EXISTS classes (
   id SERIAL PRIMARY KEY,
@@ -193,10 +196,12 @@ INSERT INTO lecturers (id,name,email,password,default_password,nidn,courses,is_p
 ON CONFLICT (id) DO NOTHING;
 SELECT setval('lecturers_id_seq', (SELECT COALESCE(MAX(id), 1) FROM lecturers));
 
-INSERT INTO lab_assistants (id,name,email,phone,student_id,lab,supervisor,semester,gpa,assigned_courses,weekly_hours,status,join_date,password,default_password,is_password_changed) VALUES
-(1,'Rama Dhani','rama.dhani@student.ac.id','081234567890','TI2021001','Laboratorium Pemrograman','Dr. Budi Santoso',7,3.85,2,12,'Aktif','2024-09-01','password','password',false),
-(2,'Dina Amelia','dina.amelia@student.ac.id','082345678901','TI2021002','Laboratorium Database','Prof. Siti Aminah',7,3.92,1,8,'Aktif','2024-09-01','password','password',false),
-(3,'Fahmi Akbar','fahmi.akbar@student.ac.id','083456789012','TI2021003','Laboratorium Jaringan','Dr. Ahmad Wijaya',6,3.78,2,10,'Aktif','2024-09-01','password','password',false)
+INSERT INTO lab_assistants (id,name,email,phone,student_id,role,lab,supervisor,semester,gpa,assigned_courses,weekly_hours,status,join_date,password,default_password,is_password_changed) VALUES
+(1,'Rama Dhani','rama.dhani@student.ac.id','081234567890','TI2021001','aslab','Laboratorium Pemrograman','Dr. Budi Santoso',7,3.85,2,12,'Aktif','2024-09-01','password','password',false),
+(2,'Dina Amelia','dina.amelia@student.ac.id','082345678901','TI2021002','aslab','Laboratorium Database','Prof. Siti Aminah',7,3.92,1,8,'Aktif','2024-09-01','password','password',false),
+(3,'Fahmi Akbar','fahmi.akbar@student.ac.id','083456789012','TI2021003','aslab','Laboratorium Jaringan','Dr. Ahmad Wijaya',6,3.78,2,10,'Aktif','2024-09-01','password','password',false),
+(4,'Sari Laboran','laboran@app.com','081200000002','DEMO-LABORAN-001','laboran','Laboratorium Pemrograman','Kepala Lab Informatika',1,0,0,40,'Aktif','2024-09-01','password','password',false),
+(5,'Kepala Lab Informatika','kalab@app.com','081200000003','DEMO-KALAB-001','kalab','Kepala Laboratorium','-',1,0,0,40,'Aktif','2024-09-01','password','password',false)
 ON CONFLICT (id) DO NOTHING;
 SELECT setval('lab_assistants_id_seq', (SELECT COALESCE(MAX(id), 1) FROM lab_assistants));
 
@@ -254,6 +259,7 @@ CREATE TABLE IF NOT EXISTS course_materials (
   course_id INT NOT NULL REFERENCES courses(id) ON DELETE CASCADE,
   session_id INT REFERENCES course_sessions(id) ON DELETE SET NULL,
   title VARCHAR(255) NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
   material_type VARCHAR(50) NOT NULL,
   size VARCHAR(50) NOT NULL DEFAULT '',
   duration VARCHAR(50) NOT NULL DEFAULT '',
@@ -262,6 +268,12 @@ CREATE TABLE IF NOT EXISTS course_materials (
   week INT,
   status VARCHAR(50) NOT NULL DEFAULT 'available'
 );
+
+ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT '';
+ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS file_path VARCHAR(500) NOT NULL DEFAULT '';
+ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS created_by INT;
+ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP;
+ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
 
 CREATE TABLE IF NOT EXISTS session_assignments (
   id SERIAL PRIMARY KEY,
@@ -365,6 +377,8 @@ CREATE TABLE IF NOT EXISTS assistant_tasks (
 
 CREATE TABLE IF NOT EXISTS assistant_reports (
   id SERIAL PRIMARY KEY,
+  course_id INT REFERENCES courses(id) ON DELETE SET NULL,
+  created_by INT,
   nim VARCHAR(50) NOT NULL,
   name VARCHAR(255) NOT NULL,
   course_code VARCHAR(50) NOT NULL,
@@ -376,8 +390,33 @@ CREATE TABLE IF NOT EXISTS assistant_reports (
   status VARCHAR(80) NOT NULL,
   score INT,
   file_name VARCHAR(255) NOT NULL,
-  file_size VARCHAR(50) NOT NULL
+  file_size VARCHAR(50) NOT NULL,
+  file_path VARCHAR(500) NOT NULL DEFAULT '',
+  submitted_to_laboran_at TIMESTAMP,
+  laboran_approved_by INT,
+  laboran_approved_at TIMESTAMP,
+  submitted_to_kalab_at TIMESTAMP,
+  kalab_approved_by INT,
+  kalab_approved_at TIMESTAMP,
+  rejected_by INT,
+  rejected_at TIMESTAMP,
+  rejection_note TEXT NOT NULL DEFAULT '',
+  returned_to_role VARCHAR(30) NOT NULL DEFAULT ''
 );
+
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS course_id INT REFERENCES courses(id) ON DELETE SET NULL;
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS created_by INT;
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS file_path VARCHAR(500) NOT NULL DEFAULT '';
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS submitted_to_laboran_at TIMESTAMP;
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS laboran_approved_by INT;
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS laboran_approved_at TIMESTAMP;
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS submitted_to_kalab_at TIMESTAMP;
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS kalab_approved_by INT;
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS kalab_approved_at TIMESTAMP;
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS rejected_by INT;
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP;
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS rejection_note TEXT NOT NULL DEFAULT '';
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS returned_to_role VARCHAR(30) NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS assistant_report_summary (
   id SERIAL PRIMARY KEY,
@@ -410,7 +449,7 @@ INSERT INTO ui_options (option_group,label,value,icon,sort_order) VALUES
 ('student_grade_semesters','2025/2026','2025/2026','',1),('student_grade_semesters','2024/2025','2024/2025','',2),('student_grade_semesters','2023/2024','2023/2024','',3),
 ('student_programs','Teknik Informatika','Teknik Informatika','',1),('student_programs','Sistem Informasi','Sistem Informasi','',2),('student_programs','Desain Komunikasi Visual','Desain Komunikasi Visual','',3),('student_programs','Teknik Komputer','Teknik Komputer','',4),('student_programs','Manajemen Informatika','Manajemen Informatika','',5),
 ('labs','Semua Lab','Semua Lab','',1),('labs','Laboratorium Pemrograman','Laboratorium Pemrograman','',2),('labs','Laboratorium Database','Laboratorium Database','',3),('labs','Laboratorium Jaringan','Laboratorium Jaringan','',4),('labs','Laboratorium AI & Machine Learning','Laboratorium AI & Machine Learning','',5),('labs','Laboratorium Desain','Laboratorium Desain','',6),
-('user_tabs','Mahasiswa','students','graduation',1),('user_tabs','Dosen','lecturers','users',2),('user_tabs','Asisten Laboratorium','assistants','userCog',3),
+('user_tabs','Mahasiswa','students','graduation',1),('user_tabs','Lainnya','lecturers','users',2),('user_tabs','Asisten Laboratorium','assistants','userCog',3),
 ('import_file_types','text/csv','text/csv','',1),('import_file_types','application/vnd.ms-excel','application/vnd.ms-excel','',2),('import_file_types','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','',3)
 ON CONFLICT (option_group,value) DO UPDATE SET label=EXCLUDED.label, icon=EXCLUDED.icon, sort_order=EXCLUDED.sort_order;
 
@@ -589,12 +628,15 @@ ON CONFLICT (email) DO UPDATE SET
   is_password_changed = EXCLUDED.is_password_changed,
   updated_at = CURRENT_TIMESTAMP;
 
-INSERT INTO lab_assistants (name,email,phone,student_id,lab,supervisor,semester,gpa,assigned_courses,weekly_hours,status,join_date,password,default_password,is_password_changed) VALUES
-('Andi Pratama','asslab@app.com','081200000001','DEMO-ASLAB-001','Laboratorium Pemrograman','Prof. Dr. Ahmad Wijaya',7,3.85,3,12,'Aktif',CURRENT_DATE,'password','password',false)
+INSERT INTO lab_assistants (name,email,phone,student_id,role,lab,supervisor,semester,gpa,assigned_courses,weekly_hours,status,join_date,password,default_password,is_password_changed) VALUES
+('Andi Pratama','asslab@app.com','081200000001','DEMO-ASLAB-001','aslab','Laboratorium Pemrograman','Prof. Dr. Ahmad Wijaya',7,3.85,3,12,'Aktif',CURRENT_DATE,'password','password',false),
+('Sari Laboran','laboran@app.com','081200000002','DEMO-LABORAN-001','laboran','Laboratorium Pemrograman','Kepala Lab Informatika',1,0,0,40,'Aktif',CURRENT_DATE,'password','password',false),
+('Kepala Lab Informatika','kalab@app.com','081200000003','DEMO-KALAB-001','kalab','Kepala Laboratorium','-',1,0,0,40,'Aktif',CURRENT_DATE,'password','password',false)
 ON CONFLICT (email) DO UPDATE SET
   name = EXCLUDED.name,
   phone = EXCLUDED.phone,
   student_id = EXCLUDED.student_id,
+  role = EXCLUDED.role,
   lab = EXCLUDED.lab,
   supervisor = EXCLUDED.supervisor,
   semester = EXCLUDED.semester,
