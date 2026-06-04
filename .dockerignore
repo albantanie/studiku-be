@@ -6,3 +6,4 @@ bin
 build
 coverage
 .tmp
+php_vendor

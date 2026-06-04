@@ -11,14 +11,20 @@ RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /app/server ./main.go
 
+FROM composer:2 AS php-deps
+WORKDIR /app
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader
+
 FROM alpine:3.20
 WORKDIR /app
 
-RUN apk add --no-cache ca-certificates tzdata && \
+RUN apk add --no-cache ca-certificates tzdata php83 php83-ctype php83-dom php83-xml php83-mbstring php83-iconv php83-gd && \
     addgroup -S app && adduser -S app -G app
 
 COPY --from=builder /app/server /app/server
 COPY --from=builder /app/scripts /app/scripts
+COPY --from=php-deps /app/php_vendor /app/php_vendor
 
 ENV SERVER_PORT=8080 \
     DB_HOST=postgres \

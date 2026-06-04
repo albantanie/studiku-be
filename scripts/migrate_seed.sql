@@ -274,6 +274,11 @@ ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS file_path VARCHAR(500) NOT
 ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS created_by INT;
 ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP;
 ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP;
+ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS approved_by INT;
+ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP;
+ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS rejected_by INT;
+ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP;
+ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS rejection_note TEXT NOT NULL DEFAULT '';
 
 CREATE TABLE IF NOT EXISTS session_assignments (
   id SERIAL PRIMARY KEY,
@@ -286,6 +291,34 @@ CREATE TABLE IF NOT EXISTS session_assignments (
   score INT,
   submitted_count INT NOT NULL DEFAULT 0,
   total_students INT NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS session_assessments (
+  id SERIAL PRIMARY KEY,
+  session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+  assessment_type VARCHAR(20) NOT NULL CHECK (assessment_type IN ('pretest','posttest')),
+  title VARCHAR(255) NOT NULL DEFAULT '',
+  score INT,
+  max_score INT NOT NULL DEFAULT 100,
+  status VARCHAR(50) NOT NULL DEFAULT 'not_started',
+  note TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(session_id, assessment_type)
+);
+
+CREATE TABLE IF NOT EXISTS session_assessment_results (
+  id SERIAL PRIMARY KEY,
+  session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+  student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  assessment_type VARCHAR(20) NOT NULL CHECK (assessment_type IN ('pretest','posttest')),
+  score INT,
+  max_score INT NOT NULL DEFAULT 100,
+  status VARCHAR(50) NOT NULL DEFAULT 'not_started',
+  note TEXT NOT NULL DEFAULT '',
+  submitted_at TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(session_id, student_id, assessment_type)
 );
 
 CREATE TABLE IF NOT EXISTS attendance_sessions (
@@ -436,6 +469,66 @@ CREATE TABLE IF NOT EXISTS report_workflows (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS institution_settings (
+  id SERIAL PRIMARY KEY,
+  university_name VARCHAR(255) NOT NULL,
+  faculty_name VARCHAR(255) NOT NULL DEFAULT '',
+  study_program_name VARCHAR(255) NOT NULL DEFAULT '',
+  laboratory_name VARCHAR(255) NOT NULL DEFAULT '',
+  campus_a_address TEXT NOT NULL DEFAULT '',
+  campus_b_address TEXT NOT NULL DEFAULT '',
+  website VARCHAR(255) NOT NULL DEFAULT '',
+  email VARCHAR(255) NOT NULL DEFAULT '',
+  phone VARCHAR(255) NOT NULL DEFAULT '',
+  logo_path VARCHAR(500) NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS course_assessment_weights (
+  id SERIAL PRIMARY KEY,
+  course_id INT REFERENCES courses(id) ON DELETE CASCADE,
+  attendance_weight NUMERIC(5,2) NOT NULL DEFAULT 10,
+  pretest_weight NUMERIC(5,2) NOT NULL DEFAULT 15,
+  assignment_weight NUMERIC(5,2) NOT NULL DEFAULT 20,
+  practicum_weight NUMERIC(5,2) NOT NULL DEFAULT 20,
+  posttest_weight NUMERIC(5,2) NOT NULL DEFAULT 35,
+  passing_grade NUMERIC(5,2) NOT NULL DEFAULT 55,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(course_id)
+);
+
+CREATE TABLE IF NOT EXISTS grade_scales (
+  id SERIAL PRIMARY KEY,
+  min_score NUMERIC(5,2) NOT NULL,
+  max_score NUMERIC(5,2) NOT NULL,
+  grade VARCHAR(5) NOT NULL,
+  is_passed BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS report_signers (
+  id SERIAL PRIMARY KEY,
+  role VARCHAR(80) NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  identifier_type VARCHAR(50) NOT NULL DEFAULT 'NIDN',
+  identifier_number VARCHAR(80) NOT NULL DEFAULT '',
+  signature_path VARCHAR(500) NOT NULL DEFAULT '',
+  is_active BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS student_activity_logs (
+  id SERIAL PRIMARY KEY,
+  student_id INT REFERENCES students(id) ON DELETE SET NULL,
+  course_id INT REFERENCES courses(id) ON DELETE SET NULL,
+  session_id INT REFERENCES course_sessions(id) ON DELETE SET NULL,
+  activity_type VARCHAR(80) NOT NULL,
+  description TEXT NOT NULL DEFAULT '',
+  ip_address VARCHAR(80) NOT NULL DEFAULT '',
+  user_agent TEXT NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS admin_activities (
   id SERIAL PRIMARY KEY,
   action VARCHAR(255) NOT NULL,
@@ -461,7 +554,7 @@ INSERT INTO import_lecturer_preview_courses (lecturer_email, course_name, sort_o
 ('imported@university.ac.id','Imported Course 1',1),('imported@university.ac.id','Imported Course 2',2)
 ON CONFLICT DO NOTHING;
 
-INSERT INTO course_sessions (course_id,session_number,title,topic,session_date,session_time,session_type,conference_link,room,description)
+INSERT INTO course_sessions (course_id,session_number,title,topic,session_date,session_time,session_type,conference_link,room,description,sort_order)
 SELECT
   c.id,
   n,
@@ -477,10 +570,11 @@ SELECT
   'offline',
   NULL,
   c.room,
-  'Sesi otomatis dari konfigurasi jumlah sesi kursus admin.'
+  'Sesi otomatis dari konfigurasi jumlah sesi kursus admin.',
+  n
 FROM courses c
 CROSS JOIN generate_series(1, c.sessions) AS gs(n)
-ON CONFLICT (course_id,session_number) DO UPDATE SET title=EXCLUDED.title, topic=EXCLUDED.topic, session_date=EXCLUDED.session_date, session_time=EXCLUDED.session_time, session_type=EXCLUDED.session_type, conference_link=EXCLUDED.conference_link, room=EXCLUDED.room, description=EXCLUDED.description;
+ON CONFLICT (course_id,session_number) DO UPDATE SET title=EXCLUDED.title, topic=EXCLUDED.topic, session_date=EXCLUDED.session_date, session_time=EXCLUDED.session_time, session_type=EXCLUDED.session_type, conference_link=EXCLUDED.conference_link, room=EXCLUDED.room, description=EXCLUDED.description, sort_order=EXCLUDED.sort_order;
 SELECT setval('course_sessions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM course_sessions));
 
 INSERT INTO course_materials (id,course_id,session_id,title,material_type,size,duration,downloads,upload_date,week,status) VALUES
@@ -502,6 +596,84 @@ INSERT INTO session_assignments (id,course_id,session_id,title,description,due_d
 (6,1,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=3),'Praktikum 1: Implementasi Algoritma Dasar','Buat program sederhana.','15 Jan 2026, 23:59','pending',NULL,32,35)
 ON CONFLICT (id) DO UPDATE SET course_id=EXCLUDED.course_id, session_id=EXCLUDED.session_id, title=EXCLUDED.title, description=EXCLUDED.description, due_date=EXCLUDED.due_date, status=EXCLUDED.status, score=EXCLUDED.score, submitted_count=EXCLUDED.submitted_count, total_students=EXCLUDED.total_students;
 SELECT setval('session_assignments_id_seq', (SELECT COALESCE(MAX(id), 1) FROM session_assignments));
+
+INSERT INTO session_assessments (session_id,assessment_type,title,score,max_score,status,note)
+SELECT
+  cs.id,
+  assessment.assessment_type,
+  CASE
+    WHEN assessment.assessment_type = 'pretest' THEN 'Pretest - ' || cs.topic
+    ELSE 'Post-test - ' || cs.topic
+  END,
+  CASE
+    WHEN cs.session_number = 1 AND assessment.assessment_type = 'pretest' THEN 70 + (cs.course_id % 10)
+    WHEN cs.session_number = 1 AND assessment.assessment_type = 'posttest' THEN 82 + (cs.course_id % 10)
+    WHEN cs.session_number = 2 AND assessment.assessment_type = 'pretest' THEN 68 + (cs.course_id % 10)
+    ELSE NULL
+  END,
+  100,
+  CASE
+    WHEN cs.session_number = 1 THEN 'completed'
+    WHEN cs.session_number = 2 AND assessment.assessment_type = 'pretest' THEN 'completed'
+    ELSE 'not_started'
+  END,
+  ''
+FROM course_sessions cs
+CROSS JOIN (VALUES ('pretest'), ('posttest')) AS assessment(assessment_type)
+WHERE cs.session_number <= 3
+ON CONFLICT (session_id,assessment_type) DO UPDATE SET title=EXCLUDED.title,score=EXCLUDED.score,max_score=EXCLUDED.max_score,status=EXCLUDED.status,note=EXCLUDED.note,updated_at=now();
+
+INSERT INTO session_assessment_results (session_id,student_id,assessment_type,score,max_score,status,note,submitted_at)
+SELECT
+  cs.id,
+  st.id,
+  assessment.assessment_type,
+  CASE
+    WHEN cs.session_number = 1 AND assessment.assessment_type = 'pretest' THEN 62 + (st.id % 18)
+    WHEN cs.session_number = 1 AND assessment.assessment_type = 'posttest' THEN 76 + (st.id % 16)
+    WHEN cs.session_number = 2 AND assessment.assessment_type = 'pretest' THEN 58 + (st.id % 20)
+    WHEN cs.session_number = 2 AND assessment.assessment_type = 'posttest' THEN 72 + (st.id % 18)
+    WHEN cs.session_number = 3 AND assessment.assessment_type = 'pretest' THEN 60 + (st.id % 18)
+    ELSE NULL
+  END,
+  100,
+  CASE
+    WHEN cs.session_number <= 2 THEN 'completed'
+    WHEN cs.session_number = 3 AND assessment.assessment_type = 'pretest' THEN 'completed'
+    ELSE 'not_started'
+  END,
+  CASE WHEN assessment.assessment_type = 'pretest' THEN 'Nilai awal mahasiswa' ELSE 'Nilai akhir mahasiswa' END,
+  CASE
+    WHEN cs.session_number <= 2 THEN CURRENT_TIMESTAMP
+    WHEN cs.session_number = 3 AND assessment.assessment_type = 'pretest' THEN CURRENT_TIMESTAMP
+    ELSE NULL
+  END
+FROM course_sessions cs
+JOIN courses c ON c.id=cs.course_id
+JOIN classes cls ON cls.code=c.class_code
+JOIN students st ON st.id=ANY(cls.students)
+CROSS JOIN (VALUES ('pretest'), ('posttest')) AS assessment(assessment_type)
+WHERE cs.session_number <= 3
+ON CONFLICT (session_id,student_id,assessment_type) DO UPDATE SET
+  score=EXCLUDED.score,
+  max_score=EXCLUDED.max_score,
+  status=EXCLUDED.status,
+  note=EXCLUDED.note,
+  submitted_at=EXCLUDED.submitted_at,
+  updated_at=now();
+
+INSERT INTO session_pretest_questions (id,session_id,question,options,correct_option,points,explanation,sort_order,created_by) VALUES
+(1,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'Apa tujuan pretest dalam praktikum?','["Mengukur pemahaman awal","Menilai akhir pembelajaran","Mengganti presensi","Membuat laporan akhir"]'::jsonb,0,10,'Pretest dipakai untuk mengukur pemahaman awal mahasiswa.',1,1),
+(2,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'Apa keluaran utama dari pretest?','["Nilai awal","Nilai tugas","Nilai presensi","Nilai laporan"]'::jsonb,0,10,'Pretest menghasilkan nilai awal sebelum pembelajaran dimulai.',2,1),
+(3,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'Kapan pretest dikerjakan?','["Sebelum materi","Setelah post-test","Saat upload tugas","Setelah laporan"]'::jsonb,0,10,'Pretest dikerjakan sebelum mahasiswa mempelajari materi sesi.',3,1)
+ON CONFLICT (id) DO UPDATE SET question=EXCLUDED.question,options=EXCLUDED.options,correct_option=EXCLUDED.correct_option,points=EXCLUDED.points,explanation=EXCLUDED.explanation,sort_order=EXCLUDED.sort_order,created_by=EXCLUDED.created_by,updated_at=now();
+SELECT setval('session_pretest_questions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM session_pretest_questions));
+
+INSERT INTO session_pretest_submissions (id,session_id,student_id,answers,score,max_score,status,submitted_at) VALUES
+(1,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),1,'[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":0}]'::jsonb,100,100,'completed',CURRENT_TIMESTAMP),
+(2,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),2,'[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":1},{"questionId":3,"answerIndex":0}]'::jsonb,66,100,'completed',CURRENT_TIMESTAMP)
+ON CONFLICT (id) DO UPDATE SET session_id=EXCLUDED.session_id,student_id=EXCLUDED.student_id,answers=EXCLUDED.answers,score=EXCLUDED.score,max_score=EXCLUDED.max_score,status=EXCLUDED.status,submitted_at=EXCLUDED.submitted_at,updated_at=now();
+SELECT setval('session_pretest_submissions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM session_pretest_submissions));
 
 INSERT INTO attendance_sessions (id,role_scope,course_code,course_name,class_name,session_number,session_date,session_time,room,lab,topic,total_students,present,absent,sick,permit,excused,status,assistant_status,assistant_check_in_time) VALUES
 (1,'lecturer','CS301','Algoritma & Struktur Data','CS301',1,'2026-01-08','08:00 - 10:00','Lab 301','','Pengenalan Algoritma',35,32,1,1,1,0,'Selesai','',''),
@@ -559,6 +731,52 @@ INSERT INTO assistant_report_summary (id,course_code,course_name,class_name,tota
 (3,'CS304','Jaringan Komputer','CS304',1,1,0,0,1)
 ON CONFLICT (id) DO UPDATE SET total_reports=EXCLUDED.total_reports,reviewed=EXCLUDED.reviewed,pending=EXCLUDED.pending,approved=EXCLUDED.approved,needs_revision=EXCLUDED.needs_revision;
 SELECT setval('assistant_report_summary_id_seq', (SELECT COALESCE(MAX(id), 1) FROM assistant_report_summary));
+
+INSERT INTO institution_settings (id,university_name,faculty_name,study_program_name,laboratory_name,campus_a_address,campus_b_address,website,email,phone,logo_path) VALUES
+(1,'Universitas Muhammadiyah Jakarta','Fakultas Teknik','Teknik Informatika','Laboratorium Teknik Informatika','JL. K. H. Ahmad Dahlan Cirendeu Ciputat Tangerang Selatan','Jl. Cempaka Putih Tengah XXVII, Jakarta Pusat 10510','umj.ac.id','info@umj.ac.id','+6221-7492862/7401894','')
+ON CONFLICT (id) DO UPDATE SET university_name=EXCLUDED.university_name,faculty_name=EXCLUDED.faculty_name,study_program_name=EXCLUDED.study_program_name,laboratory_name=EXCLUDED.laboratory_name,campus_a_address=EXCLUDED.campus_a_address,campus_b_address=EXCLUDED.campus_b_address,website=EXCLUDED.website,email=EXCLUDED.email,phone=EXCLUDED.phone,logo_path=EXCLUDED.logo_path,updated_at=CURRENT_TIMESTAMP;
+
+INSERT INTO course_assessment_weights (course_id,attendance_weight,pretest_weight,assignment_weight,practicum_weight,posttest_weight,passing_grade)
+SELECT id,10,15,20,20,35,55 FROM courses
+ON CONFLICT (course_id) DO NOTHING;
+
+INSERT INTO grade_scales (id,min_score,max_score,grade,is_passed) VALUES
+(1,85,100,'A',TRUE),
+(2,80,84.99,'A-',TRUE),
+(3,75,79.99,'B+',TRUE),
+(4,70,74.99,'B',TRUE),
+(5,65,69.99,'B-',TRUE),
+(6,60,64.99,'C+',TRUE),
+(7,55,59.99,'C',TRUE),
+(8,45,54.99,'D',FALSE),
+(9,0,44.99,'E',FALSE)
+ON CONFLICT (id) DO UPDATE SET min_score=EXCLUDED.min_score,max_score=EXCLUDED.max_score,grade=EXCLUDED.grade,is_passed=EXCLUDED.is_passed;
+
+DELETE FROM report_signers
+WHERE lower(name) IN ('popy meilina, m.kom','poppy melina, m.kom','sitti nurbaya ambo, mmsi');
+
+INSERT INTO report_signers (id,role,name,identifier_type,identifier_number,signature_path,is_active)
+SELECT 2,'head_of_laboratory',name,'ID',student_id,'',TRUE
+FROM lab_assistants
+WHERE role='kalab' AND status='Aktif'
+ORDER BY id
+LIMIT 1
+ON CONFLICT (id) DO UPDATE SET role=EXCLUDED.role,name=EXCLUDED.name,identifier_type=EXCLUDED.identifier_type,identifier_number=EXCLUDED.identifier_number,signature_path=EXCLUDED.signature_path,is_active=EXCLUDED.is_active;
+
+INSERT INTO student_activity_logs (student_id,course_id,session_id,activity_type,description,created_at)
+SELECT st.id, c.id, cs.id, activity.activity_type, activity.description, CURRENT_TIMESTAMP - (cs.session_number || ' days')::interval
+FROM course_sessions cs
+JOIN courses c ON c.id=cs.course_id
+JOIN classes cls ON cls.code=c.class_code
+JOIN students st ON st.id=ANY(cls.students)
+CROSS JOIN (VALUES
+  ('Mengisi Presensi','Presensi sesi praktikum'),
+  ('Mengerjakan Pretest','Submit pretest sesi'),
+  ('Membuka Materi','Membuka materi praktikum'),
+  ('Mengerjakan Post-test','Submit post-test sesi')
+) AS activity(activity_type,description)
+WHERE cs.session_number <= 2
+ON CONFLICT DO NOTHING;
 
 INSERT INTO admin_activities (id,action,detail,activity_time,icon,sort_order) VALUES
 (1,'Mahasiswa baru terdaftar','Ahmad Fauzi - Teknik Informatika','5 menit lalu','user',1),
@@ -650,5 +868,46 @@ ON CONFLICT (email) DO UPDATE SET
   updated_at = CURRENT_TIMESTAMP;
 
 -- <<< 007_admins_and_demo_login_users.up.sql
+
+COMMIT;
+
+-- >>> 008_features.up.sql
+ALTER TABLE course_sessions ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 0;
+UPDATE course_sessions SET sort_order = session_number WHERE sort_order = 0;
+ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS rejection_note TEXT NOT NULL DEFAULT '';
+ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS file_url TEXT NOT NULL DEFAULT '';
+ALTER TABLE session_assignments ADD COLUMN IF NOT EXISTS file_url TEXT NOT NULL DEFAULT '';
+CREATE TABLE IF NOT EXISTS assistant_session_attendance (
+  id SERIAL PRIMARY KEY,
+  session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+  status VARCHAR(20) NOT NULL DEFAULT 'Hadir',
+  check_in_time VARCHAR(20) NOT NULL DEFAULT '',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(session_id)
+);
+-- <<< 008_features.up.sql
+
+-- >>> 009_sync_grades.up.sql
+CREATE OR REPLACE FUNCTION sync_submission_grade_to_report()
+RETURNS TRIGGER AS $$
+BEGIN
+  UPDATE assistant_reports
+  SET score = NEW.score, feedback = NEW.feedback
+  WHERE nim = (SELECT student_id FROM students WHERE id = NEW.student_id LIMIT 1)
+    AND week = (SELECT session_number FROM course_sessions WHERE id = (SELECT session_id FROM session_assignments WHERE id = NEW.assignment_id LIMIT 1) LIMIT 1)
+    AND course_code = (SELECT class_code FROM courses WHERE id = (SELECT course_id FROM session_assignments WHERE id = NEW.assignment_id LIMIT 1) LIMIT 1);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS sync_submission_grade_trigger ON student_submissions;
+
+CREATE TRIGGER sync_submission_grade_trigger
+AFTER UPDATE ON student_submissions
+FOR EACH ROW
+WHEN (NEW.score IS DISTINCT FROM OLD.score OR NEW.feedback IS DISTINCT FROM OLD.feedback)
+EXECUTE FUNCTION sync_submission_grade_to_report();
+-- <<< 009_sync_grades.up.sql
 
 COMMIT;

@@ -83,6 +83,10 @@ type Assignment struct {
 	CourseColor   string  `json:"courseColor"`
 	SubmittedDate *string `json:"submittedDate,omitempty"`
 	Score         *int    `json:"score,omitempty"`
+	AnswerText    string  `json:"answerText,omitempty"`
+	FileURL       string  `json:"fileUrl,omitempty"`
+	FileName      string  `json:"fileName,omitempty"`
+	FileSize      string  `json:"fileSize,omitempty"`
 }
 
 type Grade struct {
@@ -259,13 +263,72 @@ type AssistantAttendanceUpdate struct {
 	Records []AttendanceRecordInput `json:"records" binding:"required"`
 }
 
+type SessionAssessmentInput struct {
+	Type     string `json:"type" binding:"required"`
+	Title    string `json:"title"`
+	Score    *int   `json:"score"`
+	MaxScore int    `json:"maxScore"`
+	Status   string `json:"status"`
+	Note     string `json:"note"`
+}
+
+type StudentSessionAssessmentInput struct {
+	Type      string `json:"type" binding:"required"`
+	StudentID int    `json:"studentId"`
+	Score     *int   `json:"score"`
+	MaxScore  int    `json:"maxScore"`
+	Status    string `json:"status"`
+	Note      string `json:"note"`
+}
+
+type PretestQuestionInput struct {
+	Question      string   `json:"question" binding:"required"`
+	Options       []string `json:"options" binding:"required"`
+	CorrectOption int      `json:"correctOption" binding:"min=0"`
+	Points        int      `json:"points"`
+	Explanation   string   `json:"explanation"`
+	SortOrder     int      `json:"sortOrder"`
+}
+
+type PretestAnswerInput struct {
+	QuestionID  int `json:"questionId" binding:"required"`
+	AnswerIndex int `json:"answerIndex" binding:"required"`
+}
+
+type PretestSubmissionInput struct {
+	Answers []PretestAnswerInput `json:"answers" binding:"required"`
+}
+
+type PretestQuestion struct {
+	ID            int      `json:"id"`
+	SessionID     int      `json:"sessionId"`
+	Question      string   `json:"question"`
+	Options       []string `json:"options"`
+	CorrectOption *int     `json:"correctOption,omitempty"`
+	Points        int      `json:"points"`
+	Explanation   string   `json:"explanation,omitempty"`
+	SortOrder     int      `json:"sortOrder"`
+}
+
+type PretestSubmission struct {
+	ID          int                  `json:"id"`
+	SessionID   int                  `json:"sessionId"`
+	StudentID   int                  `json:"studentId"`
+	Answers     []PretestAnswerInput `json:"answers"`
+	Score       int                  `json:"score"`
+	MaxScore    int                  `json:"maxScore"`
+	Status      string               `json:"status"`
+	SubmittedAt string               `json:"submittedAt,omitempty"`
+}
+
 type SessionAssignment struct {
 	ID             int    `json:"id"`
 	CourseID       int    `json:"courseId"`
-	SessionID      int    `json:"sessionId" binding:"required"`
+	SessionID      int    `json:"sessionId"`
 	Title          string `json:"title" binding:"required"`
 	Description    string `json:"description"`
-	Deadline       string `json:"deadline" binding:"required"`
+	Deadline       string `json:"deadline"`
+	DueDate        string `json:"dueDate"`
 	Status         string `json:"status"`
 	SubmittedCount int    `json:"submittedCount"`
 	TotalStudents  int    `json:"totalStudents"`
@@ -273,18 +336,19 @@ type SessionAssignment struct {
 }
 
 type MaterialItem struct {
-	ID          int    `json:"id"`
-	CourseID    int    `json:"courseId"`
-	SessionID   *int   `json:"sessionId,omitempty"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Type        string `json:"type"`
-	Size        string `json:"size"`
-	UploadDate  string `json:"uploadDate"`
-	Status      string `json:"status"`
-	FileURL     string `json:"fileUrl"`
-	CourseName  string `json:"courseName"`
-	CreatedBy   *int   `json:"createdBy,omitempty"`
+	ID            int    `json:"id"`
+	CourseID      int    `json:"courseId"`
+	SessionID     *int   `json:"sessionId,omitempty"`
+	Title         string `json:"title"`
+	Description   string `json:"description"`
+	Type          string `json:"type"`
+	Size          string `json:"size"`
+	UploadDate    string `json:"uploadDate"`
+	Status        string `json:"status"`
+	FileURL       string `json:"fileUrl"`
+	CourseName    string `json:"courseName"`
+	CreatedBy     *int   `json:"createdBy,omitempty"`
+	RejectionNote string `json:"rejectionNote,omitempty"`
 }
 
 type ReportItem struct {
@@ -307,6 +371,123 @@ type ReportItem struct {
 	ReturnedToRole string `json:"returnedToRole"`
 }
 
+type ReportDocument struct {
+	Institution   ReportInstitution `json:"institution"`
+	Report        ReportItem        `json:"report"`
+	Program       string            `json:"program"`
+	AcademicYear  string            `json:"academicYear"`
+	Semester      string            `json:"semester"`
+	Instructor    string            `json:"instructor"`
+	Assistant     string            `json:"assistant"`
+	Credits       int               `json:"credits"`
+	TotalSessions int               `json:"totalSessions"`
+	TotalStudents int               `json:"totalStudents"`
+	PassingGrade  float64           `json:"passingGrade"`
+	Students      []ReportStudent   `json:"students"`
+	Personnel     []ReportPerson    `json:"personnel"`
+	Activities    []ReportActivity  `json:"activityLogs"`
+	Signers       []ReportSigner    `json:"signers"`
+}
+
+type ReportInstitution struct {
+	UniversityName   string `json:"universityName"`
+	FacultyName      string `json:"facultyName"`
+	StudyProgramName string `json:"studyProgramName"`
+	LaboratoryName   string `json:"laboratoryName"`
+	CampusAAddress   string `json:"campusAAddress"`
+	CampusBAddress   string `json:"campusBAddress"`
+	Website          string `json:"website"`
+	Email            string `json:"email"`
+	Phone            string `json:"phone"`
+	LogoPath         string `json:"logoPath"`
+}
+
+type ReportStudent struct {
+	No                int     `json:"no"`
+	NIM               string  `json:"nim"`
+	Name              string  `json:"name"`
+	AttendanceScore   float64 `json:"attendanceScore"`
+	Pretest           float64 `json:"pretest"`
+	AssignmentScore   float64 `json:"assignmentScore"`
+	Posttest          float64 `json:"posttest"`
+	Praktikum         float64 `json:"praktikum"`
+	FinalScore        float64 `json:"finalScore"`
+	Grade             string  `json:"grade"`
+	Passed            bool    `json:"passed"`
+	Meetings          int     `json:"meetings"`
+	Present           int     `json:"present"`
+	Absent            int     `json:"absent"`
+	Permit            int     `json:"permit"`
+	Sick              int     `json:"sick"`
+	AttendancePercent float64 `json:"attendancePercent"`
+	Progress          float64 `json:"progress"`
+}
+
+type ReportPerson struct {
+	Name       string `json:"name"`
+	Role       string `json:"role"`
+	Identifier string `json:"identifier"`
+	Note       string `json:"note"`
+}
+
+type ReportActivity struct {
+	No          int    `json:"no"`
+	Time        string `json:"time"`
+	StudentName string `json:"studentName"`
+	Activity    string `json:"activity"`
+	CourseName  string `json:"courseName"`
+	SessionName string `json:"sessionName"`
+	Description string `json:"description"`
+}
+
+type ReportSigner struct {
+	Role             string `json:"role"`
+	Name             string `json:"name"`
+	IdentifierType   string `json:"identifierType"`
+	IdentifierNumber string `json:"identifierNumber"`
+	SignaturePath    string `json:"signaturePath"`
+}
+
 type ReportActionRequest struct {
 	Note string `json:"note"`
+}
+
+type SessionAssignmentInput struct {
+	CourseID    int    `json:"courseId" binding:"required"`
+	SessionID   int    `json:"sessionId"`
+	Title       string `json:"title" binding:"required"`
+	Description string `json:"description"`
+	DueDate     string `json:"dueDate" binding:"required"`
+}
+
+type AssistantSessionAttendance struct {
+	Status      string `json:"status" binding:"required"`
+	CheckInTime string `json:"checkInTime"`
+}
+
+type RejectReportInput struct {
+	RejectionNote string `json:"rejectionNote"`
+}
+
+type UpdateSessionInput struct {
+	SessionDate string `json:"sessionDate"`
+	SortOrder   int    `json:"sortOrder"`
+}
+
+type CreateMaterialInput struct {
+	CourseID  int    `json:"courseId" binding:"required"`
+	SessionID int    `json:"sessionId"`
+	Title     string `json:"title" binding:"required"`
+	FileURL   string `json:"fileUrl" binding:"required"`
+	FileType  string `json:"fileType"`
+	FileSize  string `json:"fileSize"`
+}
+
+type StudentSubmissionInput struct {
+	AssignmentID int    `json:"assignmentId" binding:"required"`
+	StudentID    int    `json:"studentId" binding:"required"`
+	AnswerText   string `json:"answerText"`
+	FileURL      string `json:"fileUrl"`
+	FileName     string `json:"fileName"`
+	FileSize     string `json:"fileSize"`
 }

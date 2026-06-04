@@ -3,6 +3,7 @@ package repositories
 import (
 	"crypto/rand"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
@@ -16,7 +17,196 @@ import (
 
 type Repository struct{ db *sql.DB }
 
-func New(db *sql.DB) *Repository { return &Repository{db: db} }
+func (r *Repository) DB() *sql.DB { return r.db }
+
+func New(db *sql.DB) *Repository {
+	r := &Repository{db: db}
+	r.autoMigrate()
+	return r
+}
+
+// autoMigrate applies safe schema additions that may not exist in older deployments.
+func (r *Repository) autoMigrate() {
+	stmts := []string{
+		`ALTER TABLE course_sessions ADD COLUMN IF NOT EXISTS sort_order INT NOT NULL DEFAULT 0`,
+		`UPDATE course_sessions SET sort_order = session_number WHERE sort_order = 0`,
+		`ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS rejection_note TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE assistant_reports ADD COLUMN IF NOT EXISTS feedback TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS file_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS description TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS file_path VARCHAR(500) NOT NULL DEFAULT ''`,
+		`ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS created_by INT`,
+		`ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMP`,
+		`ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMP`,
+		`ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS approved_by INT`,
+		`ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP`,
+		`ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS rejected_by INT`,
+		`ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS rejected_at TIMESTAMP`,
+		`ALTER TABLE course_materials ADD COLUMN IF NOT EXISTS rejection_note TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE course_materials ALTER COLUMN material_type TYPE VARCHAR(255)`,
+		`ALTER TABLE course_materials ALTER COLUMN size TYPE VARCHAR(255)`,
+		`ALTER TABLE course_materials ALTER COLUMN upload_date TYPE VARCHAR(255)`,
+		`ALTER TABLE session_assignments ADD COLUMN IF NOT EXISTS file_url TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE session_assignments ALTER COLUMN due_date TYPE VARCHAR(255)`,
+		`UPDATE courses SET students = COALESCE((SELECT cardinality(cls.students) FROM classes cls WHERE cls.code = courses.class_code), students) WHERE class_code != ''`,
+		`UPDATE attendance_sessions s SET total_students = COALESCE((SELECT cardinality(cls.students) FROM classes cls WHERE cls.code = s.course_code), s.total_students)`,
+		`UPDATE session_assignments sa SET total_students = COALESCE((SELECT cardinality(cls.students) FROM courses c JOIN classes cls ON cls.code = c.class_code WHERE c.id = sa.course_id), sa.total_students)`,
+		`UPDATE lab_assistants la SET assigned_courses = (SELECT count(*) FROM courses WHERE assistant = la.name)`,
+		`CREATE TABLE IF NOT EXISTS assistant_session_attendance (
+			id SERIAL PRIMARY KEY,
+			session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+			status VARCHAR(20) NOT NULL DEFAULT 'Hadir',
+			check_in_time VARCHAR(20) NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(session_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS student_submissions (
+			id SERIAL PRIMARY KEY,
+			assignment_id INT NOT NULL REFERENCES session_assignments(id) ON DELETE CASCADE,
+			student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+			answer_text TEXT NOT NULL DEFAULT '',
+			file_url TEXT NOT NULL DEFAULT '',
+			file_name VARCHAR(255) NOT NULL DEFAULT '',
+			file_size VARCHAR(50) NOT NULL DEFAULT '',
+			submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			score INT,
+			feedback TEXT NOT NULL DEFAULT '',
+			UNIQUE(assignment_id, student_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS session_assessments (
+			id SERIAL PRIMARY KEY,
+			session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+			assessment_type VARCHAR(20) NOT NULL CHECK (assessment_type IN ('pretest','posttest')),
+			title VARCHAR(255) NOT NULL DEFAULT '',
+			score INT,
+			max_score INT NOT NULL DEFAULT 100,
+			status VARCHAR(50) NOT NULL DEFAULT 'not_started',
+			note TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(session_id, assessment_type)
+		)`,
+		`CREATE TABLE IF NOT EXISTS session_assessment_results (
+			id SERIAL PRIMARY KEY,
+			session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+			student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+			assessment_type VARCHAR(20) NOT NULL CHECK (assessment_type IN ('pretest','posttest')),
+			score INT,
+			max_score INT NOT NULL DEFAULT 100,
+			status VARCHAR(50) NOT NULL DEFAULT 'not_started',
+			note TEXT NOT NULL DEFAULT '',
+			submitted_at TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(session_id, student_id, assessment_type)
+		)`,
+		`CREATE TABLE IF NOT EXISTS session_pretest_questions (
+			id SERIAL PRIMARY KEY,
+			session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+			question TEXT NOT NULL,
+			options JSONB NOT NULL DEFAULT '[]'::jsonb,
+			correct_option INT NOT NULL DEFAULT 0,
+			points INT NOT NULL DEFAULT 10,
+			explanation TEXT NOT NULL DEFAULT '',
+			sort_order INT NOT NULL DEFAULT 0,
+			created_by INT REFERENCES lab_assistants(id) ON DELETE SET NULL,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE TABLE IF NOT EXISTS session_pretest_submissions (
+			id SERIAL PRIMARY KEY,
+			session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+			student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+			answers JSONB NOT NULL DEFAULT '[]'::jsonb,
+			score INT NOT NULL DEFAULT 0,
+			max_score INT NOT NULL DEFAULT 100,
+			status VARCHAR(50) NOT NULL DEFAULT 'not_started',
+			submitted_at TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(session_id, student_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS institution_settings (
+			id SERIAL PRIMARY KEY,
+			university_name VARCHAR(255) NOT NULL,
+			faculty_name VARCHAR(255) NOT NULL DEFAULT '',
+			study_program_name VARCHAR(255) NOT NULL DEFAULT '',
+			laboratory_name VARCHAR(255) NOT NULL DEFAULT '',
+			campus_a_address TEXT NOT NULL DEFAULT '',
+			campus_b_address TEXT NOT NULL DEFAULT '',
+			website VARCHAR(255) NOT NULL DEFAULT '',
+			email VARCHAR(255) NOT NULL DEFAULT '',
+			phone VARCHAR(255) NOT NULL DEFAULT '',
+			logo_path VARCHAR(500) NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`INSERT INTO institution_settings (id,university_name,faculty_name,study_program_name,laboratory_name,campus_a_address,campus_b_address,website,email,phone,logo_path)
+		 VALUES (1,'Universitas Muhammadiyah Jakarta','Fakultas Teknik','Teknik Informatika','Laboratorium Teknik Informatika','JL. K. H. Ahmad Dahlan Cirendeu Ciputat Tangerang Selatan','Jl. Cempaka Putih Tengah XXVII, Jakarta Pusat 10510','umj.ac.id','info@umj.ac.id','+6221-7492862/7401894','')
+		 ON CONFLICT (id) DO NOTHING`,
+		`CREATE TABLE IF NOT EXISTS course_assessment_weights (
+			id SERIAL PRIMARY KEY,
+			course_id INT REFERENCES courses(id) ON DELETE CASCADE,
+			attendance_weight NUMERIC(5,2) NOT NULL DEFAULT 10,
+			pretest_weight NUMERIC(5,2) NOT NULL DEFAULT 15,
+			assignment_weight NUMERIC(5,2) NOT NULL DEFAULT 20,
+			practicum_weight NUMERIC(5,2) NOT NULL DEFAULT 20,
+			posttest_weight NUMERIC(5,2) NOT NULL DEFAULT 35,
+			passing_grade NUMERIC(5,2) NOT NULL DEFAULT 55,
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			UNIQUE(course_id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS grade_scales (
+			id SERIAL PRIMARY KEY,
+			min_score NUMERIC(5,2) NOT NULL,
+			max_score NUMERIC(5,2) NOT NULL,
+			grade VARCHAR(5) NOT NULL,
+			is_passed BOOLEAN NOT NULL DEFAULT TRUE
+		)`,
+		`INSERT INTO grade_scales (id,min_score,max_score,grade,is_passed) VALUES
+			(1,85,100,'A',TRUE),(2,80,84.99,'A-',TRUE),(3,75,79.99,'B+',TRUE),(4,70,74.99,'B',TRUE),
+			(5,65,69.99,'B-',TRUE),(6,60,64.99,'C+',TRUE),(7,55,59.99,'C',TRUE),(8,45,54.99,'D',FALSE),(9,0,44.99,'E',FALSE)
+		 ON CONFLICT (id) DO NOTHING`,
+		`CREATE TABLE IF NOT EXISTS report_signers (
+			id SERIAL PRIMARY KEY,
+			role VARCHAR(80) NOT NULL,
+			name VARCHAR(255) NOT NULL,
+			identifier_type VARCHAR(50) NOT NULL DEFAULT 'NIDN',
+			identifier_number VARCHAR(80) NOT NULL DEFAULT '',
+			signature_path VARCHAR(500) NOT NULL DEFAULT '',
+			is_active BOOLEAN NOT NULL DEFAULT TRUE
+		)`,
+		`CREATE TABLE IF NOT EXISTS student_activity_logs (
+			id SERIAL PRIMARY KEY,
+			student_id INT REFERENCES students(id) ON DELETE SET NULL,
+			course_id INT REFERENCES courses(id) ON DELETE SET NULL,
+			session_id INT REFERENCES course_sessions(id) ON DELETE SET NULL,
+			activity_type VARCHAR(80) NOT NULL,
+			description TEXT NOT NULL DEFAULT '',
+			ip_address VARCHAR(80) NOT NULL DEFAULT '',
+			user_agent TEXT NOT NULL DEFAULT '',
+			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`INSERT INTO session_pretest_questions (session_id,question,options,correct_option,points,explanation,sort_order,created_by)
+		 SELECT * FROM (
+			VALUES
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'Apa tujuan pretest dalam praktikum?','["Mengukur pemahaman awal","Menilai akhir pembelajaran","Mengganti presensi","Membuat laporan akhir"]'::jsonb,0,10,'Pretest dipakai untuk mengukur pemahaman awal mahasiswa.',1,1),
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'Apa keluaran utama dari pretest?','["Nilai awal","Nilai tugas","Nilai presensi","Nilai laporan"]'::jsonb,0,10,'Pretest menghasilkan nilai awal sebelum pembelajaran dimulai.',2,1),
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'Kapan pretest dikerjakan?','["Sebelum materi","Setelah post-test","Saat upload tugas","Setelah laporan"]'::jsonb,0,10,'Pretest dikerjakan sebelum mahasiswa mempelajari materi sesi.',3,1)
+		 ) AS seed(session_id,question,options,correct_option,points,explanation,sort_order,created_by)
+		 WHERE seed.session_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM session_pretest_questions)`,
+		`INSERT INTO session_pretest_submissions (session_id,student_id,answers,score,max_score,status,submitted_at)
+		 SELECT * FROM (
+			VALUES
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),1,'[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":0}]'::jsonb,100,100,'completed',CURRENT_TIMESTAMP),
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),2,'[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":1},{"questionId":3,"answerIndex":0}]'::jsonb,66,100,'completed',CURRENT_TIMESTAMP)
+		 ) AS seed(session_id,student_id,answers,score,max_score,status,submitted_at)
+		 WHERE seed.session_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM session_pretest_submissions)`,
+	}
+	for _, s := range stmts {
+		_, _ = r.db.Exec(s)
+	}
+}
 
 func (r *Repository) Login(email string, password string) (*models.LoginUser, error) {
 	var user models.LoginUser
@@ -143,7 +333,7 @@ func (r *Repository) Dashboard() (map[string]interface{}, error) {
 	if err != nil {
 		return nil, err
 	}
-	assignments, err := r.Assignments()
+	assignments, err := r.Assignments(0)
 	if err != nil {
 		return nil, err
 	}
@@ -207,8 +397,43 @@ func (r *Repository) StudentCourses() ([]models.StudentCourse, error) {
 	return items, rows.Err()
 }
 
-func (r *Repository) Assignments() ([]models.Assignment, error) {
-	rows, err := r.db.Query(`SELECT id,title,course,assistant,due_date,due_time,status,course_color,submitted_date,score FROM assignments ORDER BY id`)
+func (r *Repository) Assignments(studentID int) ([]models.Assignment, error) {
+	query := `
+		SELECT
+			sa.id,
+			sa.title,
+			c.name AS course,
+			c.assistant,
+			sa.due_date,
+			'23:59' AS due_time,
+			CASE
+				WHEN sub.id IS NULL THEN 'pending'
+				WHEN sub.score IS NULL THEN 'submitted'
+				ELSE 'graded'
+			END AS status,
+			COALESCE(c.color, 'bg-blue-500') AS course_color,
+			CASE WHEN sub.submitted_at IS NULL THEN NULL ELSE to_char(sub.submitted_at, 'DD Mon YYYY') END AS submitted_date,
+			sub.score,
+			COALESCE(sub.answer_text, '') AS answer_text,
+			COALESCE(sub.file_url, '') AS file_url,
+			COALESCE(sub.file_name, '') AS file_name,
+			COALESCE(sub.file_size, '') AS file_size
+		FROM session_assignments sa
+		JOIN courses c ON c.id = sa.course_id
+		LEFT JOIN student_submissions sub
+			ON sub.assignment_id = sa.id AND ($1 = 0 OR sub.student_id = $1)
+		WHERE (
+			$1 = 0
+			OR EXISTS (
+				SELECT 1
+				FROM classes cls
+				WHERE cls.code = c.class_code
+					AND $1 = ANY(cls.students)
+			)
+		)
+		ORDER BY sa.id
+	`
+	rows, err := r.db.Query(query, studentID)
 	if err != nil {
 		return nil, err
 	}
@@ -216,7 +441,7 @@ func (r *Repository) Assignments() ([]models.Assignment, error) {
 	items := []models.Assignment{}
 	for rows.Next() {
 		var a models.Assignment
-		if err := rows.Scan(&a.ID, &a.Title, &a.Course, &a.Assistant, &a.DueDate, &a.DueTime, &a.Status, &a.CourseColor, &a.SubmittedDate, &a.Score); err != nil {
+		if err := rows.Scan(&a.ID, &a.Title, &a.Course, &a.Assistant, &a.DueDate, &a.DueTime, &a.Status, &a.CourseColor, &a.SubmittedDate, &a.Score, &a.AnswerText, &a.FileURL, &a.FileName, &a.FileSize); err != nil {
 			return nil, err
 		}
 		items = append(items, a)
@@ -327,10 +552,11 @@ func (r *Repository) syncAllCourseSessions() error {
 
 func (r *Repository) syncCourseSessions(courseID int) error {
 	_, err := r.db.Exec(`
-		INSERT INTO course_sessions (course_id,session_number,title,topic,session_date,session_time,session_type,conference_link,room,description)
-		SELECT c.id,n,'Sesi ' || n,c.name,to_char(CURRENT_DATE,'YYYY-MM-DD'),
+		INSERT INTO course_sessions (course_id,session_number,title,topic,session_date,session_time,session_type,conference_link,room,description,sort_order)
+		SELECT c.id,n,'Sesi ' || n,c.name,
+			to_char(CURRENT_DATE + ((n - 1) * INTERVAL '7 days'), 'YYYY-MM-DD'),
 			CASE WHEN c.start_time = '' AND c.end_time = '' THEN c.day ELSE c.start_time || ' - ' || c.end_time END,
-			'offline',NULL,c.room,''
+			'offline',NULL,c.room,'',n
 		FROM courses c
 		CROSS JOIN generate_series(1,c.sessions) n
 		WHERE c.id=$1
@@ -831,11 +1057,11 @@ func (r *Repository) MaterialsForRole(role string, userID int) ([]models.Materia
 	where := `m.deleted_at IS NULL`
 	args := []interface{}{}
 	if role != "aslab" {
-		where += ` AND m.status IN ('submitted','available')`
+		where += ` AND m.status IN ('submitted','available','approved','rejected')`
 	}
 	rows, err := r.db.Query(`
 		SELECT m.id,m.course_id,m.session_id,m.title,m.description,m.material_type,m.size,m.upload_date,m.status,
-			m.file_path,c.name,m.created_by
+			m.file_path,c.name,m.created_by,COALESCE(m.rejection_note,'')
 		FROM course_materials m
 		JOIN courses c ON c.id=m.course_id
 		WHERE `+where+`
@@ -848,7 +1074,7 @@ func (r *Repository) MaterialsForRole(role string, userID int) ([]models.Materia
 	items := []models.MaterialItem{}
 	for rows.Next() {
 		var item models.MaterialItem
-		if err := rows.Scan(&item.ID, &item.CourseID, &item.SessionID, &item.Title, &item.Description, &item.Type, &item.Size, &item.UploadDate, &item.Status, &item.FileURL, &item.CourseName, &item.CreatedBy); err != nil {
+		if err := rows.Scan(&item.ID, &item.CourseID, &item.SessionID, &item.Title, &item.Description, &item.Type, &item.Size, &item.UploadDate, &item.Status, &item.FileURL, &item.CourseName, &item.CreatedBy, &item.RejectionNote); err != nil {
 			return nil, err
 		}
 		item.FileURL = "/api/materials/" + fmt.Sprint(item.ID) + "/file"
@@ -880,7 +1106,42 @@ func (r *Repository) CreateMaterial(courseID int, sessionID *int, title string, 
 }
 
 func (r *Repository) SubmitMaterial(id int, userID int) error {
-	result, err := r.db.Exec(`UPDATE course_materials SET status='submitted',submitted_at=now() WHERE id=$1 AND deleted_at IS NULL`, id)
+	result, err := r.db.Exec(`UPDATE course_materials SET status='submitted',submitted_at=now(),rejection_note='',rejected_by=NULL,rejected_at=NULL WHERE id=$1 AND deleted_at IS NULL`, id)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (r *Repository) ApproveMaterial(id int, userID int) error {
+	result, err := r.db.Exec(`
+		UPDATE course_materials
+		SET status='approved',approved_by=$1,approved_at=now(),rejection_note='',rejected_by=NULL,rejected_at=NULL
+		WHERE id=$2 AND deleted_at IS NULL AND status IN ('submitted','available','rejected')
+	`, userID, id)
+	if err != nil {
+		return err
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
+func (r *Repository) RejectMaterial(id int, userID int, note string) error {
+	if strings.TrimSpace(note) == "" {
+		return errors.New("catatan penolakan wajib diisi")
+	}
+	result, err := r.db.Exec(`
+		UPDATE course_materials
+		SET status='rejected',rejected_by=$1,rejected_at=now(),rejection_note=$2
+		WHERE id=$3 AND deleted_at IS NULL AND status IN ('submitted','available','approved')
+	`, userID, note, id)
 	if err != nil {
 		return err
 	}
@@ -894,7 +1155,7 @@ func (r *Repository) SubmitMaterial(id int, userID int) error {
 func (r *Repository) MaterialFilePath(id int, role string) (string, error) {
 	query := `SELECT file_path FROM course_materials WHERE id=$1 AND deleted_at IS NULL`
 	if role != "aslab" {
-		query += ` AND status IN ('submitted','available')`
+		query += ` AND status IN ('submitted','available','approved','rejected')`
 	}
 	var path string
 	if err := r.db.QueryRow(query, id).Scan(&path); err != nil {
@@ -1215,6 +1476,356 @@ func (r *Repository) ReportFilePath(id int, role string) (string, error) {
 	return path, nil
 }
 
+func (r *Repository) ReportDocument(id int, role string, userID int) (*models.ReportDocument, error) {
+	doc := &models.ReportDocument{}
+	var score sql.NullInt64
+	err := r.db.QueryRow(`
+		SELECT ar.id, ar.course_id, ar.nim, ar.name, ar.course_code, ar.course_name, ar.class_name, ar.week, ar.topic,
+			ar.submitted_at, ar.status, ar.score, ar.file_name, ar.file_size, ar.rejection_note, ar.returned_to_role,
+			COALESCE(c.study_program,''), COALESCE(c.academic_year,''), COALESCE(ay.semester,''), COALESCE(c.instructor,''),
+			COALESCE(c.assistant, ar.name), COALESCE(c.credits,1), COALESCE(NULLIF(c.sessions,0),0), COALESCE(NULLIF(c.students,0), cardinality(cls.students), 0)
+		FROM assistant_reports ar
+		LEFT JOIN courses c ON c.id=ar.course_id OR (ar.course_id IS NULL AND c.class_code=ar.course_code)
+		LEFT JOIN classes cls ON cls.code=COALESCE(NULLIF(c.class_code,''), ar.class_name, ar.course_code)
+		LEFT JOIN academic_years ay ON ay.name=c.academic_year
+		WHERE ar.id=$1
+		ORDER BY c.id NULLS LAST
+		LIMIT 1
+	`, id).Scan(
+		&doc.Report.ID, &doc.Report.CourseID, &doc.Report.NIM, &doc.Report.Name, &doc.Report.CourseCode, &doc.Report.CourseName,
+		&doc.Report.Class, &doc.Report.Week, &doc.Report.Topic, &doc.Report.SubmittedAt, &doc.Report.Status, &score,
+		&doc.Report.FileName, &doc.Report.FileSize, &doc.Report.RejectionNote, &doc.Report.ReturnedToRole,
+		&doc.Program, &doc.AcademicYear, &doc.Semester, &doc.Instructor, &doc.Assistant, &doc.Credits, &doc.TotalSessions, &doc.TotalStudents,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if score.Valid {
+		value := int(score.Int64)
+		doc.Report.Score = &value
+	}
+	doc.Report.FileURL = "/api/reports/" + fmt.Sprint(doc.Report.ID) + "/file"
+	if err := r.loadReportInstitution(doc); err != nil {
+		return nil, err
+	}
+	weights, passingGrade, err := r.reportWeights(doc.Report.CourseID)
+	if err != nil {
+		return nil, err
+	}
+	doc.PassingGrade = passingGrade
+
+	rows, err := r.db.Query(`
+		WITH report AS (
+			SELECT ar.id, ar.course_id, ar.course_code, ar.class_name, ar.week
+			FROM assistant_reports ar
+			WHERE ar.id=$1
+		), course_ref AS (
+			SELECT COALESCE(c.id, report.course_id) course_id,
+				COALESCE(NULLIF(c.class_code,''), report.class_name, report.course_code) class_code,
+				report.week
+			FROM report
+			LEFT JOIN courses c ON c.id=report.course_id OR (report.course_id IS NULL AND c.class_code=report.course_code)
+			ORDER BY c.id NULLS LAST
+			LIMIT 1
+		), student_list AS (
+			SELECT st.id student_db_id, st.student_id nim, st.name
+			FROM course_ref cr
+			JOIN classes cls ON cls.code=cr.class_code
+			JOIN students st ON st.id = ANY(cls.students)
+			UNION
+			SELECT 0, ar.nim, ar.name
+			FROM assistant_reports ar
+			WHERE ar.id=$1
+				AND NOT EXISTS (
+					SELECT 1
+					FROM course_ref cr
+					JOIN classes cls ON cls.code=cr.class_code
+					JOIN students st ON st.id = ANY(cls.students)
+				)
+		), attendance AS (
+			SELECT sl.nim,
+				COUNT(ar.id)::int meetings,
+				COUNT(*) FILTER (WHERE ar.status='Hadir')::int present,
+				COUNT(*) FILTER (WHERE ar.status='Alpa')::int absent,
+				COUNT(*) FILTER (WHERE ar.status='Izin')::int permit,
+				COUNT(*) FILTER (WHERE ar.status='Sakit')::int sick
+			FROM student_list sl
+			CROSS JOIN course_ref cr
+			LEFT JOIN attendance_sessions ats ON ats.role_scope='assistant' AND ats.course_code=cr.class_code
+			LEFT JOIN attendance_records ar ON ar.session_id=ats.id AND ar.nim=sl.nim
+			GROUP BY sl.nim
+		)
+		SELECT row_number() OVER (ORDER BY sl.nim)::int no, sl.nim, sl.name,
+			CASE WHEN COALESCE(att.meetings,0) > 0 THEN round((COALESCE(att.present,0)::numeric / att.meetings::numeric) * 100, 2) ELSE 0 END::float8 attendance_score,
+			COALESCE((SELECT round(avg(sar.score)::numeric,2) FROM session_assessment_results sar JOIN course_ref cr ON true JOIN course_sessions cs ON cs.course_id=cr.course_id AND cs.id=sar.session_id WHERE sar.student_id=sl.student_db_id AND sar.assessment_type='pretest' AND sar.status='completed'), 0)::float8 pretest,
+			COALESCE((SELECT round(avg(ss.score)::numeric,2) FROM student_submissions ss JOIN session_assignments sa ON sa.id=ss.assignment_id JOIN course_ref cr ON cr.course_id=sa.course_id WHERE ss.student_id=sl.student_db_id AND ss.score IS NOT NULL), 0)::float8 assignment_score,
+			CASE WHEN COALESCE(att.meetings,0) > 0 THEN round((COALESCE(att.present,0)::numeric / att.meetings::numeric) * 100, 2) ELSE 0 END::float8 praktikum,
+			COALESCE((SELECT round(avg(sar.score)::numeric,2) FROM session_assessment_results sar JOIN course_ref cr ON true JOIN course_sessions cs ON cs.course_id=cr.course_id AND cs.id=sar.session_id WHERE sar.student_id=sl.student_db_id AND sar.assessment_type='posttest' AND sar.status='completed'), 0)::float8 posttest,
+			(
+				(CASE WHEN COALESCE(att.present,0) > 0 THEN 25 ELSE 0 END) +
+				(CASE WHEN EXISTS (SELECT 1 FROM session_assessment_results sar JOIN course_ref cr ON true JOIN course_sessions cs ON cs.course_id=cr.course_id AND cs.id=sar.session_id WHERE sar.student_id=sl.student_db_id AND sar.assessment_type='pretest' AND sar.status='completed') THEN 25 ELSE 0 END) +
+				(CASE WHEN EXISTS (SELECT 1 FROM course_materials cm JOIN course_ref cr ON cr.course_id=cm.course_id WHERE cm.deleted_at IS NULL AND cm.status IN ('submitted','available','approved')) THEN 25 ELSE 0 END) +
+				(CASE WHEN EXISTS (SELECT 1 FROM session_assessment_results sar JOIN course_ref cr ON true JOIN course_sessions cs ON cs.course_id=cr.course_id AND cs.id=sar.session_id WHERE sar.student_id=sl.student_db_id AND sar.assessment_type='posttest' AND sar.status='completed') THEN 25 ELSE 0 END)
+			)::float8 progress,
+			COALESCE(att.meetings,0), COALESCE(att.present,0), COALESCE(att.absent,0), COALESCE(att.permit,0), COALESCE(att.sick,0)
+		FROM student_list sl
+		LEFT JOIN attendance att ON att.nim=sl.nim
+		ORDER BY sl.nim
+	`, id)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	doc.Students = []models.ReportStudent{}
+	for rows.Next() {
+		var student models.ReportStudent
+		if err := rows.Scan(&student.No, &student.NIM, &student.Name, &student.AttendanceScore, &student.Pretest, &student.AssignmentScore, &student.Praktikum, &student.Posttest, &student.Progress, &student.Meetings, &student.Present, &student.Absent, &student.Permit, &student.Sick); err != nil {
+			return nil, err
+		}
+		student.AttendancePercent = student.Praktikum
+		student.FinalScore = roundScore(
+			student.AttendanceScore*weights.attendance/100 +
+				student.Pretest*weights.pretest/100 +
+				student.AssignmentScore*weights.assignment/100 +
+				student.Praktikum*weights.practicum/100 +
+				student.Posttest*weights.posttest/100,
+		)
+		student.Grade, student.Passed = r.gradeForScore(student.FinalScore, passingGrade)
+		doc.Students = append(doc.Students, student)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if doc.TotalStudents == 0 {
+		doc.TotalStudents = len(doc.Students)
+	}
+	if err := r.loadReportPersonnel(doc); err != nil {
+		return nil, err
+	}
+	if err := r.loadReportActivities(doc); err != nil {
+		return nil, err
+	}
+	if err := r.loadReportSigners(doc); err != nil {
+		return nil, err
+	}
+	return doc, nil
+}
+
+type reportWeights struct {
+	attendance float64
+	pretest    float64
+	assignment float64
+	practicum  float64
+	posttest   float64
+}
+
+func (r *Repository) loadReportInstitution(doc *models.ReportDocument) error {
+	return r.db.QueryRow(`
+		SELECT university_name,faculty_name,study_program_name,laboratory_name,campus_a_address,campus_b_address,website,email,phone,logo_path
+		FROM institution_settings
+		ORDER BY id
+		LIMIT 1
+	`).Scan(
+		&doc.Institution.UniversityName,
+		&doc.Institution.FacultyName,
+		&doc.Institution.StudyProgramName,
+		&doc.Institution.LaboratoryName,
+		&doc.Institution.CampusAAddress,
+		&doc.Institution.CampusBAddress,
+		&doc.Institution.Website,
+		&doc.Institution.Email,
+		&doc.Institution.Phone,
+		&doc.Institution.LogoPath,
+	)
+}
+
+func (r *Repository) reportWeights(courseID *int) (reportWeights, float64, error) {
+	weights := reportWeights{attendance: 10, pretest: 15, assignment: 20, practicum: 20, posttest: 35}
+	passingGrade := 55.0
+	if courseID == nil {
+		return weights, passingGrade, nil
+	}
+	err := r.db.QueryRow(`
+		SELECT attendance_weight::float8,pretest_weight::float8,assignment_weight::float8,practicum_weight::float8,posttest_weight::float8,passing_grade::float8
+		FROM course_assessment_weights
+		WHERE course_id=$1
+	`, *courseID).Scan(&weights.attendance, &weights.pretest, &weights.assignment, &weights.practicum, &weights.posttest, &passingGrade)
+	if errors.Is(err, sql.ErrNoRows) {
+		return weights, passingGrade, nil
+	}
+	return weights, passingGrade, err
+}
+
+func (r *Repository) gradeForScore(score float64, passingGrade float64) (string, bool) {
+	var grade string
+	var isPassed bool
+	err := r.db.QueryRow(`
+		SELECT grade,is_passed
+		FROM grade_scales
+		WHERE $1 BETWEEN min_score AND max_score
+		ORDER BY min_score DESC
+		LIMIT 1
+	`, score).Scan(&grade, &isPassed)
+	if err == nil {
+		return grade, isPassed && score >= passingGrade
+	}
+	return gradeFromScore(score), score >= passingGrade
+}
+
+func (r *Repository) loadReportPersonnel(doc *models.ReportDocument) error {
+	var courseID interface{}
+	if doc.Report.CourseID != nil {
+		courseID = *doc.Report.CourseID
+	}
+	rows, err := r.db.Query(`
+		SELECT name, role, identifier, note
+		FROM (
+			SELECT COALESCE(NULLIF(c.instructor,''), '-') name, 'Pengajar' role, '' identifier, 'Penanggung jawab kursus' note, 1 sort_order
+			FROM courses c
+			WHERE ($1::int IS NOT NULL AND c.id=$1)
+			UNION ALL
+			SELECT COALESCE(NULLIF(c.assistant,''), '-') name, 'Aslab' role, COALESCE(la.student_id,''), 'Asisten Laboratorium' note, 2 sort_order
+			FROM courses c
+			LEFT JOIN lab_assistants la ON la.name=c.assistant
+			WHERE ($1::int IS NOT NULL AND c.id=$1)
+			UNION ALL
+			SELECT name,
+				CASE WHEN role='kalab' THEN 'Kepala Lab' WHEN role='laboran' THEN 'Laboran' ELSE role END,
+				student_id,
+				CASE WHEN role='kalab' THEN 'Ka. Laboratorium' WHEN role='laboran' THEN 'Laboran' ELSE 'Personel' END,
+				CASE WHEN role='kalab' THEN 3 ELSE 4 END
+			FROM lab_assistants
+			WHERE role IN ('kalab','laboran')
+		) personnel
+		WHERE name <> '-'
+		ORDER BY sort_order, name
+	`, courseID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	doc.Personnel = []models.ReportPerson{}
+	for rows.Next() {
+		var person models.ReportPerson
+		if err := rows.Scan(&person.Name, &person.Role, &person.Identifier, &person.Note); err != nil {
+			return err
+		}
+		doc.Personnel = append(doc.Personnel, person)
+	}
+	return rows.Err()
+}
+
+func (r *Repository) loadReportActivities(doc *models.ReportDocument) error {
+	var courseID interface{}
+	if doc.Report.CourseID != nil {
+		courseID = *doc.Report.CourseID
+	}
+	rows, err := r.db.Query(`
+		SELECT row_number() OVER (ORDER BY sal.created_at)::int,
+			to_char(sal.created_at,'YYYY-MM-DD HH24:MI'),
+			COALESCE(st.name,'-'),
+			sal.activity_type,
+			COALESCE(c.name,'-'),
+			COALESCE('Sesi ' || cs.session_number::text,'-'),
+			sal.description
+		FROM student_activity_logs sal
+		LEFT JOIN students st ON st.id=sal.student_id
+		LEFT JOIN courses c ON c.id=sal.course_id
+		LEFT JOIN course_sessions cs ON cs.id=sal.session_id
+		WHERE ($1::int IS NULL OR sal.course_id=$1)
+		ORDER BY sal.created_at
+		LIMIT 100
+	`, courseID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	doc.Activities = []models.ReportActivity{}
+	for rows.Next() {
+		var activity models.ReportActivity
+		if err := rows.Scan(&activity.No, &activity.Time, &activity.StudentName, &activity.Activity, &activity.CourseName, &activity.SessionName, &activity.Description); err != nil {
+			return err
+		}
+		doc.Activities = append(doc.Activities, activity)
+	}
+	return rows.Err()
+}
+
+func (r *Repository) loadReportSigners(doc *models.ReportDocument) error {
+	rows, err := r.db.Query(`
+		SELECT role,name,identifier_type,identifier_number,signature_path
+		FROM report_signers
+		WHERE is_active=TRUE
+			AND lower(name) NOT IN ('popy meilina, m.kom','poppy melina, m.kom')
+			AND role <> 'head_of_laboratory'
+		ORDER BY id
+	`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	doc.Signers = []models.ReportSigner{}
+	for rows.Next() {
+		var signer models.ReportSigner
+		if err := rows.Scan(&signer.Role, &signer.Name, &signer.IdentifierType, &signer.IdentifierNumber, &signer.SignaturePath); err != nil {
+			return err
+		}
+		doc.Signers = append(doc.Signers, signer)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	var kalab models.ReportSigner
+	err = r.db.QueryRow(`
+		SELECT 'head_of_laboratory',
+			name,
+			CASE WHEN student_id <> '' THEN 'ID' ELSE '' END,
+			COALESCE(student_id,''),
+			''
+		FROM lab_assistants
+		WHERE role='kalab' AND status='Aktif'
+		ORDER BY id
+		LIMIT 1
+	`).Scan(&kalab.Role, &kalab.Name, &kalab.IdentifierType, &kalab.IdentifierNumber, &kalab.SignaturePath)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	doc.Signers = append(doc.Signers, kalab)
+	return nil
+}
+
+func roundScore(value float64) float64 {
+	return float64(int(value*100+0.5)) / 100
+}
+
+func gradeFromScore(value float64) string {
+	switch {
+	case value >= 85:
+		return "A"
+	case value >= 80:
+		return "A-"
+	case value >= 75:
+		return "B+"
+	case value >= 70:
+		return "B"
+	case value >= 65:
+		return "B-"
+	case value >= 60:
+		return "C+"
+	case value >= 55:
+		return "C"
+	case value >= 45:
+		return "D"
+	default:
+		return "E"
+	}
+}
+
 func (r *Repository) ApproveReportByRole(id int, role string, userID int) error {
 	switch role {
 	case "laboran":
@@ -1330,6 +1941,32 @@ func (r *Repository) SetAssistantReportStatus(id int, status string) error {
 	return err
 }
 
+// GetAssistantReportWithCourse returns report with course info for authorization check
+func (r *Repository) GetAssistantReportWithCourse(reportID int) (map[string]interface{}, error) {
+	var courseCode, courseName string
+	err := r.db.QueryRow(`
+		SELECT ar.course_code, ar.course_name
+		FROM assistant_reports ar
+		WHERE ar.id=$1
+	`, reportID).Scan(&courseCode, &courseName)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"courseCode": courseCode,
+		"courseName": courseName,
+	}, nil
+}
+
+// GetCourseLecturer returns lecturer name for a course
+func (r *Repository) GetCourseLecturer(courseCode string) (string, error) {
+	var lecturer string
+	err := r.db.QueryRow(`
+		SELECT lecturer FROM courses WHERE class_code=$1 LIMIT 1
+	`, courseCode).Scan(&lecturer)
+	return lecturer, err
+}
+
 func (r *Repository) ReportWorkflow() ([]models.ReportWorkflowItem, error) {
 	rows, err := r.db.Query(`SELECT course_id, status, updated_at::text FROM report_workflows ORDER BY course_id`)
 	if err != nil {
@@ -1362,4 +1999,803 @@ func SQLPlaceholders(n int) string {
 		p[i] = fmt.Sprintf("$%d", i+1)
 	}
 	return strings.Join(p, ",")
+}
+
+// UpsertStudentAttendanceByCourseSession saves student attendance using course_session_id.
+// It upserts into attendance_sessions (role_scope='assistant') then replaces attendance_records.
+func (r *Repository) UpsertStudentAttendanceByCourseSession(courseSessionID int, payload *models.AssistantAttendanceUpdate) error {
+	// Get course info from course_sessions
+	var courseCode, courseName, sessionTime, room string
+	var sessionNumber int
+	var sessionDate string
+	err := r.db.QueryRow(`
+		SELECT cs.session_number, cs.session_date, cs.session_time, cs.room,
+			c.class_code, c.name
+		FROM course_sessions cs
+		JOIN courses c ON c.id = cs.course_id
+		WHERE cs.id = $1
+	`, courseSessionID).Scan(&sessionNumber, &sessionDate, &sessionTime, &room, &courseCode, &courseName)
+	if err != nil {
+		return err
+	}
+
+	tx, err := r.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	// Upsert attendance_session
+	var sessionID int
+	err = tx.QueryRow(`SELECT id FROM attendance_sessions WHERE role_scope='assistant' AND course_code=$1 AND session_number=$2`, courseCode, sessionNumber).Scan(&sessionID)
+	if err == sql.ErrNoRows {
+		err = tx.QueryRow(`
+			INSERT INTO attendance_sessions
+				(role_scope,course_code,course_name,class_name,session_number,session_date,session_time,room,lab,topic,total_students,present,absent,sick,permit,excused,status)
+			VALUES ('assistant',$1,$2,$1,$3,$4,$5,$6,'','',0,0,0,0,0,0,'Selesai')
+			RETURNING id
+		`, courseCode, courseName, sessionNumber, sessionDate, sessionTime, room).Scan(&sessionID)
+	} else if err == nil {
+		_, err = tx.Exec(`UPDATE attendance_sessions SET session_date=$1,session_time=$2,room=$3,status='Selesai' WHERE id=$4`, sessionDate, sessionTime, room, sessionID)
+	}
+	if err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(`DELETE FROM attendance_records WHERE session_id=$1`, sessionID); err != nil {
+		return err
+	}
+
+	present, absent, sick, permit := 0, 0, 0, 0
+	for _, record := range payload.Records {
+		status := normalizeAttendanceStatus(record.Status)
+		switch status {
+		case "Hadir":
+			present++
+		case "Sakit":
+			sick++
+		case "Izin":
+			permit++
+		default:
+			absent++
+		}
+		timeValue := record.Time
+		if status != "Hadir" {
+			timeValue = ""
+		}
+		if _, err := tx.Exec(`INSERT INTO attendance_records (session_id,nim,name,status,attendance_time,check_in_time) VALUES ($1,$2,$3,$4,$5,$5)`,
+			sessionID, record.NIM, record.Name, status, timeValue); err != nil {
+			return err
+		}
+	}
+
+	if _, err := tx.Exec(`UPDATE attendance_sessions SET total_students=$1,present=$2,absent=$3,sick=$4,permit=$5 WHERE id=$6`,
+		len(payload.Records), present, absent, sick, permit, sessionID); err != nil {
+		return err
+	}
+
+	return tx.Commit()
+}
+
+func (r *Repository) UpsertSessionAssessment(sessionID int, payload *models.SessionAssessmentInput) (map[string]interface{}, error) {
+	assessmentType := strings.ToLower(strings.TrimSpace(payload.Type))
+	if assessmentType != "pretest" && assessmentType != "posttest" {
+		return nil, errors.New("type harus pretest atau posttest")
+	}
+	maxScore := payload.MaxScore
+	if maxScore <= 0 {
+		maxScore = 100
+	}
+	status := strings.TrimSpace(payload.Status)
+	if status == "" {
+		if payload.Score != nil {
+			status = "completed"
+		} else {
+			status = "not_started"
+		}
+	}
+	title := strings.TrimSpace(payload.Title)
+	if title == "" {
+		if assessmentType == "pretest" {
+			title = "Pretest"
+		} else {
+			title = "Post-test"
+		}
+	}
+	var id int
+	err := r.db.QueryRow(`
+		INSERT INTO session_assessments (session_id,assessment_type,title,score,max_score,status,note,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,now())
+		ON CONFLICT (session_id,assessment_type) DO UPDATE SET
+			title=EXCLUDED.title,
+			score=EXCLUDED.score,
+			max_score=EXCLUDED.max_score,
+			status=EXCLUDED.status,
+			note=EXCLUDED.note,
+			updated_at=now()
+		RETURNING id
+	`, sessionID, assessmentType, title, payload.Score, maxScore, status, payload.Note).Scan(&id)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"id": id, "sessionId": sessionID, "type": assessmentType, "title": title,
+		"score": payload.Score, "maxScore": maxScore, "status": status, "note": payload.Note,
+	}, nil
+}
+
+func (r *Repository) SessionAssessments(sessionID int) ([]map[string]interface{}, error) {
+	rows, err := r.db.Query(`
+		SELECT id,session_id,assessment_type,title,score,max_score,status,note
+		FROM session_assessments
+		WHERE session_id=$1
+		ORDER BY assessment_type
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []map[string]interface{}{}
+	for rows.Next() {
+		var id, sid, maxScore int
+		var assessmentType, title, status, note string
+		var score *int
+		if err := rows.Scan(&id, &sid, &assessmentType, &title, &score, &maxScore, &status, &note); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]interface{}{
+			"id": id, "sessionId": sid, "type": assessmentType, "title": title,
+			"score": score, "maxScore": maxScore, "status": status, "note": note,
+		})
+	}
+	return items, rows.Err()
+}
+
+func (r *Repository) UpsertStudentSessionAssessment(sessionID int, studentID int, payload *models.StudentSessionAssessmentInput) (map[string]interface{}, error) {
+	assessmentType := strings.ToLower(strings.TrimSpace(payload.Type))
+	if assessmentType != "pretest" && assessmentType != "posttest" {
+		return nil, errors.New("type harus pretest atau posttest")
+	}
+	if studentID <= 0 {
+		return nil, errors.New("student wajib dipilih")
+	}
+	maxScore := payload.MaxScore
+	if maxScore <= 0 {
+		maxScore = 100
+	}
+	status := strings.TrimSpace(payload.Status)
+	if status == "" {
+		if payload.Score != nil {
+			status = "completed"
+		} else {
+			status = "not_started"
+		}
+	}
+	var id int
+	err := r.db.QueryRow(`
+		INSERT INTO session_assessment_results (session_id,student_id,assessment_type,score,max_score,status,note,submitted_at,updated_at)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,CASE WHEN $6='completed' THEN now() ELSE NULL END,now())
+		ON CONFLICT (session_id,student_id,assessment_type) DO UPDATE SET
+			score=EXCLUDED.score,
+			max_score=EXCLUDED.max_score,
+			status=EXCLUDED.status,
+			note=EXCLUDED.note,
+			submitted_at=CASE WHEN EXCLUDED.status='completed' THEN COALESCE(session_assessment_results.submitted_at, now()) ELSE NULL END,
+			updated_at=now()
+		RETURNING id
+	`, sessionID, studentID, assessmentType, payload.Score, maxScore, status, payload.Note).Scan(&id)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]interface{}{
+		"id": id, "sessionId": sessionID, "studentId": studentID, "type": assessmentType,
+		"score": payload.Score, "maxScore": maxScore, "status": status, "note": payload.Note,
+	}, nil
+}
+
+func (r *Repository) SessionAssessmentsForStudent(sessionID int, studentID int) (map[string]interface{}, error) {
+	rows, err := r.db.Query(`
+		SELECT sar.id,sar.assessment_type,sar.score,sar.max_score,sar.status,sar.note,
+			COALESCE(sa.title, CASE WHEN sar.assessment_type='pretest' THEN 'Pretest' ELSE 'Post-test' END) title
+		FROM session_assessment_results sar
+		LEFT JOIN session_assessments sa ON sa.session_id=sar.session_id AND sa.assessment_type=sar.assessment_type
+		WHERE sar.session_id=$1 AND sar.student_id=$2
+		ORDER BY sar.assessment_type
+	`, sessionID, studentID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := map[string]interface{}{
+		"pretest":  map[string]interface{}{"title": "Pretest", "score": nil, "maxScore": 100, "status": "not_started"},
+		"posttest": map[string]interface{}{"title": "Post-test", "score": nil, "maxScore": 100, "status": "not_started"},
+	}
+	for rows.Next() {
+		var id, maxScore int
+		var assessmentType, status, note, title string
+		var score sql.NullInt64
+		if err := rows.Scan(&id, &assessmentType, &score, &maxScore, &status, &note, &title); err != nil {
+			return nil, err
+		}
+		var scoreValue interface{}
+		if score.Valid {
+			scoreValue = int(score.Int64)
+		}
+		result[assessmentType] = map[string]interface{}{
+			"id": id, "title": title, "score": scoreValue, "maxScore": maxScore, "status": status, "note": note,
+		}
+	}
+	return result, rows.Err()
+}
+
+func (r *Repository) CreateSessionAssignmentInput(a *models.SessionAssignmentInput) (int, error) {
+	if a.CourseID == 0 && a.SessionID != 0 {
+		_ = r.db.QueryRow(`SELECT course_id FROM course_sessions WHERE id=$1`, a.SessionID).Scan(&a.CourseID)
+	}
+	var id int
+	err := r.db.QueryRow(`
+		INSERT INTO session_assignments (course_id, session_id, title, description, due_date, status, submitted_count, total_students)
+		SELECT $1, NULLIF($2,0), $3, $4, $5, 'pending', 0,
+			COALESCE((SELECT cardinality(cls.students) FROM courses c JOIN classes cls ON cls.code=c.class_code WHERE c.id=$1), 0)
+		RETURNING id
+	`, a.CourseID, a.SessionID, a.Title, a.Description, a.DueDate).Scan(&id)
+	return id, err
+}
+
+// UpdateSessionAssignment updates an existing assignment (Aslab)
+func (r *Repository) UpdateSessionAssignmentInput(id int, a *models.SessionAssignmentInput) error {
+	_, err := r.db.Exec(`
+		UPDATE session_assignments SET title=$1, description=$2, due_date=$3 WHERE id=$4
+	`, a.Title, a.Description, a.DueDate, id)
+	return err
+}
+
+// UpsertAssistantSessionAttendance saves aslab attendance for a session
+func (r *Repository) UpsertAssistantSessionAttendance(sessionID int, a *models.AssistantSessionAttendance) error {
+	_, err := r.db.Exec(`
+		INSERT INTO assistant_session_attendance (session_id, status, check_in_time, updated_at)
+		VALUES ($1, $2, $3, now())
+		ON CONFLICT (session_id) DO UPDATE SET status=EXCLUDED.status, check_in_time=EXCLUDED.check_in_time, updated_at=now()
+	`, sessionID, a.Status, a.CheckInTime)
+	return err
+}
+
+// GetAssistantSessionAttendance returns aslab attendance for a session
+func (r *Repository) GetAssistantSessionAttendance(sessionID int) (*models.AssistantSessionAttendance, error) {
+	var a models.AssistantSessionAttendance
+	err := r.db.QueryRow(`SELECT status, check_in_time FROM assistant_session_attendance WHERE session_id=$1`, sessionID).
+		Scan(&a.Status, &a.CheckInTime)
+	if err == sql.ErrNoRows {
+		return &models.AssistantSessionAttendance{Status: "", CheckInTime: ""}, nil
+	}
+	return &a, err
+}
+
+// RejectAssistantReportWithNote rejects a report with an optional note
+func (r *Repository) RejectAssistantReportWithNote(id int, note string) error {
+	_, err := r.db.Exec(`UPDATE assistant_reports SET status='Ditolak', rejection_note=$1 WHERE id=$2`, note, id)
+	return err
+}
+
+// UpdateCourseSession updates session date and sort_order (Admin)
+func (r *Repository) UpdateCourseSession(id int, input *models.UpdateSessionInput) error {
+	_, err := r.db.Exec(`
+		UPDATE course_sessions SET session_date=$1, sort_order=$2 WHERE id=$3
+	`, input.SessionDate, input.SortOrder, id)
+	return err
+}
+
+// GetCourseSessions returns sessions for a course ordered by sort_order
+func (r *Repository) GetCourseSessions(courseID int) ([]map[string]interface{}, error) {
+	rows, err := r.db.Query(`
+		SELECT id, course_id, session_number, title, topic, session_date, session_time, session_type, COALESCE(conference_link,''), room, description, sort_order
+		FROM course_sessions WHERE course_id=$1 ORDER BY sort_order, session_number
+	`, courseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []map[string]interface{}{}
+	for rows.Next() {
+		var id, courseId, sessionNumber, sortOrder int
+		var title, topic, sessionDate, sessionTime, sessionType, conferenceLink, room, description string
+		if err := rows.Scan(&id, &courseId, &sessionNumber, &title, &topic, &sessionDate, &sessionTime, &sessionType, &conferenceLink, &room, &description, &sortOrder); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]interface{}{
+			"id": id, "courseId": courseId, "sessionNumber": sessionNumber,
+			"title": title, "topic": topic, "date": sessionDate, "time": sessionTime,
+			"sessionType": sessionType, "conferenceLink": conferenceLink, "room": room,
+			"description": description, "sortOrder": sortOrder,
+		})
+	}
+	return items, rows.Err()
+}
+
+// SaveUploadedFile saves file metadata and returns the file_url
+func (r *Repository) SaveMaterialFile(courseID, sessionID int, title, fileURL, fileType, fileSize string) (int, error) {
+	var id int
+	err := r.db.QueryRow(`
+		INSERT INTO course_materials (course_id, session_id, title, material_type, size, file_url, upload_date, status)
+		VALUES ($1, NULLIF($2,0), $3, $4, $5, $6, to_char(CURRENT_DATE,'DD Mon YYYY'), 'available')
+		RETURNING id
+	`, courseID, sessionID, title, fileType, fileSize, fileURL).Scan(&id)
+	return id, err
+}
+
+// ExportReportsData returns all reports for XLSX export
+func (r *Repository) ExportReportsData() ([]map[string]interface{}, error) {
+	rows, err := r.db.Query(`
+		SELECT course_code, course_name, class_name, week, topic, nim, name, submitted_at, status, COALESCE(score,0), rejection_note
+		FROM assistant_reports ORDER BY course_code, week
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []map[string]interface{}
+	for rows.Next() {
+		var courseCode, courseName, className, topic, nim, name, submittedAt, status, rejectionNote string
+		var week, score int
+		if err := rows.Scan(&courseCode, &courseName, &className, &week, &topic, &nim, &name, &submittedAt, &status, &score, &rejectionNote); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]interface{}{
+			"courseCode": courseCode, "courseName": courseName, "class": className,
+			"week": week, "topic": topic, "nim": nim, "name": name,
+			"submittedAt": submittedAt, "status": status, "score": score, "rejectionNote": rejectionNote,
+		})
+	}
+	return items, rows.Err()
+}
+
+// GetAssignmentSubmissions returns students from the class with their submission data
+func (r *Repository) GetAssignmentSubmissions(assignmentID int) ([]map[string]interface{}, error) {
+	// First try: get students from class
+	rows, err := r.db.Query(`
+		SELECT s.id, s.student_id, s.name, s.email,
+			COALESCE(sub.answer_text,'') answer_text,
+			COALESCE(sub.file_url,'') file_url,
+			COALESCE(sub.file_name,'') file_name,
+			COALESCE(sub.file_size,'') file_size,
+			COALESCE(to_char(sub.submitted_at,'YYYY-MM-DD HH24:MI'),'') submitted_at,
+			sub.score,
+			COALESCE(sub.feedback,'') feedback
+		FROM students s
+		JOIN (
+			SELECT unnest(cls.students) AS sid
+			FROM session_assignments sa
+			JOIN courses c ON c.id = sa.course_id
+			JOIN classes cls ON cls.code = c.class_code
+			WHERE sa.id = $1
+		) class_students ON class_students.sid = s.id
+		LEFT JOIN student_submissions sub ON sub.assignment_id = $1 AND sub.student_id = s.id
+		ORDER BY s.name
+	`, assignmentID)
+	if err != nil {
+		// Fallback: just get submissions directly
+		rows, err = r.db.Query(`
+			SELECT s.id, s.student_id, s.name, s.email,
+				sub.answer_text, sub.file_url, sub.file_name, sub.file_size,
+				to_char(sub.submitted_at,'YYYY-MM-DD HH24:MI'),
+				sub.score, COALESCE(sub.feedback,'')
+			FROM student_submissions sub
+			JOIN students s ON s.id = sub.student_id
+			WHERE sub.assignment_id = $1
+			ORDER BY s.name
+		`, assignmentID)
+		if err != nil {
+			return []map[string]interface{}{}, nil
+		}
+	}
+	defer rows.Close()
+	var items []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var nim, name, email, answerText, fileUrl, fileName, fileSize, submittedAt, feedback string
+		var score *int
+		if err := rows.Scan(&id, &nim, &name, &email, &answerText, &fileUrl, &fileName, &fileSize, &submittedAt, &score, &feedback); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]interface{}{
+			"id": id, "nim": nim, "name": name, "email": email,
+			"answerText": answerText, "fileUrl": fileUrl, "fileName": fileName,
+			"fileSize": fileSize, "submittedAt": submittedAt, "score": score, "feedback": feedback,
+		})
+	}
+	if items == nil {
+		items = []map[string]interface{}{}
+	}
+	return items, rows.Err()
+}
+
+// SubmitStudentAssignment upserts a student submission
+func (r *Repository) SubmitStudentAssignment(assignmentID, studentID int, answerText, fileURL, fileName, fileSize string) error {
+	_, err := r.db.Exec(`
+		INSERT INTO student_submissions (assignment_id, student_id, answer_text, file_url, file_name, file_size, submitted_at)
+		VALUES ($1, $2, $3, $4, $5, $6, now())
+		ON CONFLICT (assignment_id, student_id) DO UPDATE SET
+			answer_text=EXCLUDED.answer_text, file_url=EXCLUDED.file_url,
+			file_name=EXCLUDED.file_name, file_size=EXCLUDED.file_size, submitted_at=now()
+	`, assignmentID, studentID, answerText, fileURL, fileName, fileSize)
+	if err != nil {
+		return err
+	}
+	// Update submitted_count
+	_, err = r.db.Exec(`
+		UPDATE session_assignments SET submitted_count = (
+			SELECT count(*) FROM student_submissions WHERE assignment_id = $1
+		) WHERE id = $1
+	`, assignmentID)
+	return err
+}
+
+// GradeStudentSubmission updates score and feedback for a student submission by submission ID
+func (r *Repository) GradeStudentSubmission(submissionID int, score int, feedback string) error {
+	_, err := r.db.Exec(`UPDATE student_submissions SET score=$1, feedback=$2 WHERE id=$3`, score, feedback, submissionID)
+	return err
+}
+
+// SyncSubmissionGradeToReport syncs grade from student_submissions to assistant_reports
+func (r *Repository) SyncSubmissionGradeToReport(submissionID int) error {
+	// Get submission details
+	var studentID, assignmentID int
+	err := r.db.QueryRow(`SELECT student_id, assignment_id FROM student_submissions WHERE id=$1`, submissionID).Scan(&studentID, &assignmentID)
+	if err != nil {
+		return err
+	}
+
+	// Get student nim
+	var nim string
+	err = r.db.QueryRow(`SELECT student_id FROM students WHERE id=$1`, studentID).Scan(&nim)
+	if err != nil {
+		return err
+	}
+
+	// Get assignment details (course_id, session_id)
+	var courseID, sessionID sql.NullInt64
+	err = r.db.QueryRow(`SELECT course_id, session_id FROM session_assignments WHERE id=$1`, assignmentID).Scan(&courseID, &sessionID)
+	if err != nil {
+		return err
+	}
+
+	// Get course code
+	var courseCode string
+	err = r.db.QueryRow(`SELECT class_code FROM courses WHERE id=$1`, courseID.Int64).Scan(&courseCode)
+	if err != nil {
+		return err
+	}
+
+	// Get score and feedback from submission
+	var score sql.NullInt64
+	var feedback string
+	err = r.db.QueryRow(`SELECT score, feedback FROM student_submissions WHERE id=$1`, submissionID).Scan(&score, &feedback)
+	if err != nil {
+		return err
+	}
+
+	// Only update if we have valid session_id
+	if !sessionID.Valid || sessionID.Int64 == 0 {
+		return nil // Skip if no session
+	}
+
+	// Get session number
+	var sessionNumber int
+	err = r.db.QueryRow(`SELECT session_number FROM course_sessions WHERE id=$1`, sessionID.Int64).Scan(&sessionNumber)
+	if err != nil {
+		return err
+	}
+
+	// Update assistant_reports with specific nim, course_code, and week
+	_, err = r.db.Exec(`
+		UPDATE assistant_reports
+		SET score=$1, feedback=$2
+		WHERE nim=$3 AND course_code=$4 AND week=$5
+	`, score, feedback, nim, courseCode, sessionNumber)
+	return err
+}
+
+// GetSessionStudents returns students from the class linked to a course_session
+func (r *Repository) GetSessionStudents(sessionID int) ([]map[string]interface{}, error) {
+	rows, err := r.db.Query(`
+		SELECT s.id, s.student_id AS nim, s.name, '' AS status, '' AS time
+		FROM course_sessions cs
+		JOIN courses c ON c.id = cs.course_id
+		JOIN classes cls ON cls.code = c.class_code
+		JOIN students s ON s.id = ANY(cls.students)
+		WHERE cs.id = $1
+		ORDER BY s.name
+	`, sessionID)
+	if err != nil {
+		return []map[string]interface{}{}, nil
+	}
+	defer rows.Close()
+	var items []map[string]interface{}
+	for rows.Next() {
+		var id int
+		var nim, name, status, t string
+		if err := rows.Scan(&id, &nim, &name, &status, &t); err != nil {
+			return nil, err
+		}
+		items = append(items, map[string]interface{}{"id": id, "nim": nim, "name": name, "status": status, "time": t})
+	}
+	if items == nil {
+		items = []map[string]interface{}{}
+	}
+	return items, rows.Err()
+}
+
+// GetAssignmentTraceFlow returns trace flow of assignment submissions from upstream to downstream
+func (r *Repository) GetAssignmentTraceFlow(assignmentID int) (map[string]interface{}, error) {
+	var payload []byte
+	err := r.db.QueryRow(`
+		SELECT json_build_object(
+			'assignment', json_build_object(
+				'id', sa.id,
+				'title', sa.title,
+				'description', sa.description,
+				'dueDate', sa.due_date,
+				'courseId', sa.course_id,
+				'courseName', c.name,
+				'instructor', c.instructor,
+				'assistant', c.assistant,
+				'totalStudents', sa.total_students,
+				'submittedCount', sa.submitted_count,
+				'gradedCount', (SELECT count(*) FROM student_submissions WHERE assignment_id = $1 AND score IS NOT NULL),
+				'pendingCount', sa.total_students - sa.submitted_count
+			),
+			'submissions', COALESCE((
+				SELECT json_agg(json_build_object(
+					'id', sub.id,
+					'studentId', sub.student_id,
+					'studentName', s.name,
+					'studentNim', s.student_id,
+					'answerText', COALESCE(sub.answer_text, ''),
+					'fileUrl', COALESCE(sub.file_url, ''),
+					'fileName', COALESCE(sub.file_name, ''),
+					'fileSize', COALESCE(sub.file_size, ''),
+					'submittedAt', COALESCE(to_char(sub.submitted_at, 'YYYY-MM-DD HH24:MI'), ''),
+					'score', sub.score,
+					'feedback', COALESCE(sub.feedback, ''),
+					'status', CASE
+						WHEN sub.id IS NULL THEN 'Belum Dikumpulkan'
+						WHEN sub.score IS NULL THEN 'Dikumpulkan'
+						ELSE 'Dinilai'
+					END
+				) ORDER BY s.name)
+				FROM student_submissions sub
+				JOIN students s ON s.id = sub.student_id
+				WHERE sub.assignment_id = $1
+			), '[]'::json),
+			'timeline', COALESCE((
+				SELECT json_agg(json_build_object(
+					'date', DATE(sub.submitted_at),
+					'count', count(*)
+				) ORDER BY DATE(sub.submitted_at))
+				FROM student_submissions sub
+				WHERE sub.assignment_id = $1
+				GROUP BY DATE(sub.submitted_at)
+			), '[]'::json)
+		)
+		FROM session_assignments sa
+		JOIN courses c ON c.id = sa.course_id
+		WHERE sa.id = $1
+	`, assignmentID).Scan(&payload)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// GetAssignmentStats returns statistics for an assignment
+func (r *Repository) GetAssignmentStats(assignmentID int) (map[string]interface{}, error) {
+	var payload []byte
+	err := r.db.QueryRow(`
+		SELECT json_build_object(
+			'totalStudents', sa.total_students,
+			'submitted', sa.submitted_count,
+			'notSubmitted', sa.total_students - sa.submitted_count,
+			'graded', (SELECT count(*) FROM student_submissions WHERE assignment_id = $1 AND score IS NOT NULL),
+			'notGraded', (SELECT count(*) FROM student_submissions WHERE assignment_id = $1 AND score IS NULL),
+			'submissionRate', CASE WHEN sa.total_students = 0 THEN 0 ELSE ROUND((sa.submitted_count::float / sa.total_students) * 100, 2) END,
+			'averageScore', COALESCE(ROUND(AVG(sub.score)::numeric, 2), 0),
+			'highestScore', COALESCE(MAX(sub.score), 0),
+			'lowestScore', COALESCE(MIN(sub.score), 0),
+			'scoreDistribution', COALESCE((
+				SELECT json_object_agg(
+					CASE
+						WHEN sub.score >= 85 THEN 'A (85-100)'
+						WHEN sub.score >= 70 THEN 'B (70-84)'
+						WHEN sub.score >= 60 THEN 'C (60-69)'
+						WHEN sub.score >= 50 THEN 'D (50-59)'
+						ELSE 'E (<50)'
+					END,
+					count(*)
+				)
+				FROM student_submissions sub
+				WHERE sub.assignment_id = $1 AND sub.score IS NOT NULL
+			), '{}'::json)
+		)
+		FROM session_assignments sa
+		LEFT JOIN student_submissions sub ON sub.assignment_id = sa.id
+		WHERE sa.id = $1
+		GROUP BY sa.id, sa.total_students, sa.submitted_count
+	`, assignmentID).Scan(&payload)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// GetAssignmentGradeImpact returns impact of assignment scores on student grades
+func (r *Repository) GetAssignmentGradeImpact(assignmentID int) (map[string]interface{}, error) {
+	var payload []byte
+	err := r.db.QueryRow(`
+		SELECT json_build_object(
+			'assignmentId', sa.id,
+			'assignmentTitle', sa.title,
+			'totalStudents', sa.total_students,
+			'averageScore', COALESCE(ROUND(AVG(sub.score)::numeric, 2), 0),
+			'impactAnalysis', COALESCE((
+				SELECT json_agg(json_build_object(
+					'studentId', s.id,
+					'studentName', s.name,
+					'studentNim', s.student_id,
+					'assignmentScore', COALESCE(sub.score, 0),
+					'submissionStatus', CASE
+						WHEN sub.id IS NULL THEN 'Belum Dikumpulkan'
+						WHEN sub.score IS NULL THEN 'Dikumpulkan'
+						ELSE 'Dinilai'
+					END,
+					'potentialGradeImpact', CASE
+						WHEN sub.score IS NULL THEN 'Tidak Ada Nilai'
+						WHEN sub.score >= 85 THEN 'Meningkatkan Nilai'
+						WHEN sub.score >= 70 THEN 'Mempertahankan Nilai'
+						ELSE 'Menurunkan Nilai'
+					END
+				) ORDER BY s.name)
+				FROM students s
+				LEFT JOIN student_submissions sub ON sub.student_id = s.id AND sub.assignment_id = $1
+				WHERE s.id IN (
+					SELECT unnest(cls.students)
+					FROM courses c
+					JOIN classes cls ON cls.code = c.class_code
+					WHERE c.id = sa.course_id
+				)
+			), '[]'::json),
+			'summary', json_build_object(
+				'excellentCount', (SELECT count(*) FROM student_submissions WHERE assignment_id = $1 AND score >= 85),
+				'goodCount', (SELECT count(*) FROM student_submissions WHERE assignment_id = $1 AND score >= 70 AND score < 85),
+				'averageCount', (SELECT count(*) FROM student_submissions WHERE assignment_id = $1 AND score >= 60 AND score < 70),
+				'poorCount', (SELECT count(*) FROM student_submissions WHERE assignment_id = $1 AND score < 60),
+				'notSubmittedCount', sa.total_students - sa.submitted_count
+			)
+		)
+		FROM session_assignments sa
+		WHERE sa.id = $1
+	`, assignmentID).Scan(&payload)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// GetReportTraceFlow returns trace flow of assistant reports with impact on grades
+func (r *Repository) GetReportTraceFlow(courseID int) (map[string]interface{}, error) {
+	var payload []byte
+	err := r.db.QueryRow(`
+		SELECT json_build_object(
+			'course', json_build_object(
+				'courseCode', course_code,
+				'courseName', course_name,
+				'className', class_name,
+				'totalReports', total_reports,
+				'reviewed', reviewed,
+				'pending', pending,
+				'approved', approved,
+				'needsRevision', needs_revision
+			),
+			'reports', COALESCE((
+				SELECT json_agg(json_build_object(
+					'id', ar.id,
+					'nim', ar.nim,
+					'name', ar.name,
+					'week', ar.week,
+					'topic', ar.topic,
+					'submittedAt', ar.submitted_at,
+					'status', ar.status,
+					'score', ar.score,
+					'fileName', ar.file_name,
+					'fileSize', ar.file_size,
+					'gradeImpact', CASE
+						WHEN ar.score IS NULL THEN 'Belum Dinilai'
+						WHEN ar.score >= 85 THEN 'Meningkatkan Nilai'
+						WHEN ar.score >= 70 THEN 'Mempertahankan Nilai'
+						ELSE 'Menurunkan Nilai'
+					END
+				) ORDER BY ar.week, ar.name)
+				FROM assistant_reports ar
+				WHERE ar.course_code = ars.course_code
+			), '[]'::json),
+			'summary', json_build_object(
+				'excellentCount', (SELECT count(*) FROM assistant_reports WHERE course_code = ars.course_code AND score >= 85),
+				'goodCount', (SELECT count(*) FROM assistant_reports WHERE course_code = ars.course_code AND score >= 70 AND score < 85),
+				'averageCount', (SELECT count(*) FROM assistant_reports WHERE course_code = ars.course_code AND score >= 60 AND score < 70),
+				'poorCount', (SELECT count(*) FROM assistant_reports WHERE course_code = ars.course_code AND score < 60),
+				'notReviewedCount', ars.pending
+			)
+		)
+		FROM assistant_report_summary ars
+		WHERE ars.id = $1
+	`, courseID).Scan(&payload)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// GetSubmissionDetail returns detail of a single submission with student and assignment info
+func (r *Repository) GetSubmissionDetail(submissionID int) (map[string]interface{}, error) {
+	var payload []byte
+	err := r.db.QueryRow(`
+		SELECT json_build_object(
+			'submission', json_build_object(
+				'id', sub.id,
+				'assignmentId', sub.assignment_id,
+				'studentId', sub.student_id,
+				'answerText', COALESCE(sub.answer_text, ''),
+				'fileUrl', COALESCE(sub.file_url, ''),
+				'fileName', COALESCE(sub.file_name, ''),
+				'fileSize', COALESCE(sub.file_size, ''),
+				'submittedAt', COALESCE(to_char(sub.submitted_at, 'YYYY-MM-DD HH24:MI'), ''),
+				'score', sub.score,
+				'feedback', COALESCE(sub.feedback, '')
+			),
+			'student', json_build_object(
+				'id', s.id,
+				'name', s.name,
+				'nim', s.student_id,
+				'email', s.email
+			),
+			'assignment', json_build_object(
+				'id', sa.id,
+				'title', sa.title,
+				'description', sa.description,
+				'dueDate', sa.due_date,
+				'courseId', sa.course_id,
+				'courseName', c.name,
+				'instructor', c.instructor,
+				'assistant', c.assistant
+			)
+		)
+		FROM student_submissions sub
+		JOIN students s ON s.id = sub.student_id
+		JOIN session_assignments sa ON sa.id = sub.assignment_id
+		JOIN courses c ON c.id = sa.course_id
+		WHERE sub.id = $1
+	`, submissionID).Scan(&payload)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }

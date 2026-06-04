@@ -21,10 +21,10 @@ func registerPageData(api *gin.RouterGroup, h *Handler) {
 	api.GET("/admin/assignments", requireRole("admin"), h.AdminAssignments)
 	api.GET("/admin/class-management", requireRole("admin", "laboran"), h.AdminClassManagement)
 	api.GET("/admin/class-students", requireRole("admin", "laboran"), h.AdminClassStudents)
-	api.GET("/admin/course-form-options", requireRole("admin", "laboran"), h.AdminCourseFormOptions)
+	api.GET("/admin/course-form-options", requireRole("admin", "laboran", "kalab"), h.AdminCourseFormOptions)
 	api.GET("/student/grade-semesters", requireRole("student"), h.StudentGradeSemesters)
-	api.GET("/admin/student-programs", requireRole("admin"), h.AdminStudentPrograms)
-	api.GET("/admin/labs", requireRole("admin"), h.AdminLabs)
+	api.GET("/admin/student-programs", requireRole("admin", "laboran", "kalab"), h.AdminStudentPrograms)
+	api.GET("/admin/labs", requireRole("admin", "laboran", "kalab"), h.AdminLabs)
 	api.GET("/admin/user-tabs", requireRole("admin"), h.AdminUserTabs)
 	api.GET("/admin/import-lecturer-preview", requireRole("admin"), h.AdminImportLecturerPreview)
 	api.GET("/admin/import-file-types", requireRole("admin"), h.AdminImportFileTypes)
@@ -51,7 +51,8 @@ func (h *Handler) StudentCourseDetail(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	data, err := h.repo.StudentCourseDetail(id)
+	authUser, _ := currentAuthUser(c)
+	data, err := h.repo.StudentCourseDetail(id, authUser.ID)
 	respond(c, data, err)
 }
 func (h *Handler) StudentSessionDetail(c *gin.Context) {
@@ -59,7 +60,8 @@ func (h *Handler) StudentSessionDetail(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	data, err := h.repo.StudentSessionDetail(id)
+	authUser, _ := currentAuthUser(c)
+	data, err := h.repo.StudentSessionDetail(id, authUser.ID)
 	respond(c, data, err)
 }
 func (h *Handler) StudentMaterials(c *gin.Context)       { h.pageData(c, "student_materials") }

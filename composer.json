@@ -1,0 +1,8 @@
+{
+    "config": {
+        "vendor-dir": "php_vendor"
+    },
+    "require": {
+        "dompdf/dompdf": "^3.1"
+    }
+}

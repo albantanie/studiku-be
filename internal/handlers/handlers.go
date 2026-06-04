@@ -1,19 +1,24 @@
 package handlers
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
+	"mime"
 	"mime/multipart"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/xuri/excelize/v2"
 	"studi-ku-backend/internal/models"
 	"studi-ku-backend/internal/repositories"
 )
@@ -45,6 +50,7 @@ func Register(r *gin.Engine, h *Handler) {
 		api.GET("/student/assignments", requireRole("student"), h.GetAssignments)
 		api.GET("/student/grades", requireRole("student"), h.GetGrades)
 		api.PUT("/student/assignments/:id/submit", requireRole("student"), h.SubmitAssignment)
+		api.POST("/student/assignments/submit", requireRole("student"), h.SubmitStudentAssignment)
 		api.PUT("/lecturer/grades/students/:id", requireRole("kalab"), h.UpdateStudentGrade)
 		api.POST("/lecturer/courses", requireRole("laboran", "aslab"), h.CreateLecturerCourse)
 		api.PUT("/lecturer/courses/:id", requireRole("admin", "laboran", "aslab", "kalab"), h.UpdateLecturerCourse)
@@ -52,15 +58,19 @@ func Register(r *gin.Engine, h *Handler) {
 		api.DELETE("/assistant/materials/:id", requireRole("aslab"), h.DeleteMaterial)
 		api.GET("/materials", requireRole("admin", "kalab", "laboran", "aslab"), h.GetMaterials)
 		api.POST("/materials", requireRole("aslab"), h.CreateMaterial)
+		api.POST("/assistant/materials", requireRole("aslab"), h.CreateMaterialMetadata)
 		api.PUT("/materials/:id/submit", requireRole("aslab"), h.SubmitMaterial)
+		api.PUT("/materials/:id/approve", requireRole("laboran", "kalab"), h.ApproveMaterial)
+		api.PUT("/materials/:id/reject", requireRole("laboran", "kalab"), h.RejectMaterial)
 		api.GET("/materials/:id/file", requireRole("admin", "kalab", "laboran", "aslab", "student"), h.MaterialFile)
+		api.GET("/materials/:id/download", requireRole("admin", "kalab", "laboran", "aslab", "student"), h.DownloadMaterial)
 
 		api.GET("/admin/courses", requireRole("admin", "laboran", "kalab"), h.GetAdminCourses)
 		api.POST("/admin/courses", requireRole("laboran"), h.CreateCourse)
 		api.PUT("/admin/courses/:id", requireRole("admin", "laboran", "kalab"), h.UpdateCourse)
 		api.DELETE("/admin/courses/:id", requireRole("laboran"), h.DeleteCourse)
 
-		api.GET("/admin/academic-years", requireRole("admin", "laboran"), h.GetAcademicYears)
+		api.GET("/admin/academic-years", requireRole("admin", "laboran", "kalab"), h.GetAcademicYears)
 		api.POST("/admin/academic-years", requireRole("admin"), h.CreateAcademicYear)
 		api.PUT("/admin/academic-years/:id", requireRole("admin"), h.UpdateAcademicYear)
 		api.DELETE("/admin/academic-years/:id", requireRole("admin"), h.DeleteAcademicYear)
@@ -107,12 +117,22 @@ func Register(r *gin.Engine, h *Handler) {
 		api.PUT("/assistant/reports/:id/review", requireRole("laboran", "kalab"), h.ReviewAssistantReport)
 		api.GET("/reports", requireRole("admin", "kalab", "laboran", "aslab"), h.GetReports)
 		api.GET("/reports/:id/file", requireRole("admin", "kalab", "laboran", "aslab"), h.ReportFile)
+		api.GET("/reports/:id/html", requireRole("admin", "kalab", "laboran", "aslab"), h.ReportHTML)
 		api.GET("/submissions/:id/download", requireRole("admin", "kalab", "laboran", "aslab"), h.ReportFile)
 		api.PUT("/reports/:id/approve", requireRole("laboran", "kalab"), h.ApproveReport)
 		api.PUT("/reports/:id/reject", requireRole("laboran", "kalab"), h.RejectReport)
-		api.PUT("/assistant/submissions/:id/grade", requireRole("aslab", "laboran"), h.ReviewAssistantReport)
 		api.PUT("/assistant/attendance/sessions/:id", requireRole("aslab"), h.UpdateAssistantAttendanceSession)
 		api.PUT("/assistant/course-sessions/:id/attendance", requireRole("aslab"), h.UpdateCourseSessionAttendance)
+		api.GET("/assistant/sessions/:id/assessments", requireRole("aslab", "student"), h.GetSessionAssessments)
+		api.PUT("/assistant/sessions/:id/assessments", requireRole("aslab"), h.UpsertSessionAssessment)
+		api.PUT("/assistant/sessions/:id/student-assessments", requireRole("aslab"), h.UpsertAssistantStudentSessionAssessment)
+		api.PUT("/student/sessions/:id/assessments", requireRole("student"), h.UpsertStudentSessionAssessment)
+		api.GET("/assistant/sessions/:id/pretest", requireRole("aslab"), h.GetAssistantSessionPretest)
+		api.POST("/assistant/sessions/:id/pretest/questions", requireRole("aslab"), h.CreatePretestQuestion)
+		api.PUT("/assistant/sessions/:id/pretest/questions/:questionId", requireRole("aslab"), h.UpdatePretestQuestion)
+		api.DELETE("/assistant/sessions/:id/pretest/questions/:questionId", requireRole("aslab"), h.DeletePretestQuestion)
+		api.GET("/student/sessions/:id/pretest", requireRole("student"), h.GetStudentSessionPretest)
+		api.POST("/student/sessions/:id/pretest/submit", requireRole("student"), h.SubmitStudentPretest)
 		api.POST("/assistant/sessions/:id/reports", requireRole("aslab"), h.SubmitAssistantSessionReport)
 		api.PUT("/lecturer/reports/:id/approve", requireRole("kalab"), h.ApproveAssistantReport)
 		api.PUT("/lecturer/reports/:id/reject", requireRole("kalab"), h.RejectAssistantReport)
@@ -121,6 +141,25 @@ func Register(r *gin.Engine, h *Handler) {
 		api.POST("/reports/workflow/approve", requireRole("laboran", "kalab"), h.ApproveReportWorkflow)
 		api.POST("/reports/workflow/reject", requireRole("laboran", "kalab"), h.RejectReportWorkflow)
 		api.POST("/reports/workflow/reset", requireRole("aslab"), h.ResetReportWorkflow)
+		api.PUT("/assistant/submissions/:id/grade", requireRole("aslab", "laboran"), h.GradeStudentSubmission)
+		api.PUT("/assistant/sessions/:id/student-attendance", requireRole("aslab"), h.UpdateStudentAttendanceByCourseSession)
+		api.POST("/assistant/sessions/:id/assignments", requireRole("aslab"), h.CreateSessionAssignment)
+		api.PUT("/assistant/assignments/:id", requireRole("aslab"), h.UpdateSessionAssignment)
+		api.GET("/assistant/assignments/:id/submissions", requireRole("aslab", "laboran", "kalab"), h.GetAssignmentSubmissions)
+		api.GET("/assistant/assignments/:id/students", requireRole("aslab"), h.GetSessionStudents)
+		api.POST("/assistant/sessions/:id/assistant-attendance", requireRole("aslab"), h.UpsertAssistantSessionAttendance)
+		api.GET("/assistant/sessions/:id/assistant-attendance", requireRole("aslab"), h.GetAssistantSessionAttendance)
+		api.POST("/upload", requireRole("admin", "kalab", "laboran", "aslab", "student"), h.UploadFile)
+		api.POST("/files/upload", requireRole("admin", "kalab", "laboran", "aslab", "student"), h.UploadFile)
+		api.GET("/files/*filepath", requireRole("admin", "kalab", "laboran", "aslab", "student"), h.ServeFile)
+		api.GET("/admin/courses/:id/sessions", requireRole("admin", "laboran", "kalab"), h.GetCourseSessions)
+		api.PUT("/admin/sessions/:id", requireRole("admin", "laboran", "kalab"), h.UpdateCourseSession)
+		api.GET("/admin/reports/export", requireRole("admin", "laboran", "kalab"), h.ExportReportsXLSX)
+		api.GET("/assignments/:id/trace", requireRole("admin", "kalab", "laboran", "aslab"), h.GetAssignmentTraceFlow)
+		api.GET("/assignments/:id/stats", requireRole("admin", "kalab", "laboran", "aslab"), h.GetAssignmentStats)
+		api.GET("/assignments/:id/grade-impact", requireRole("admin", "kalab", "laboran", "aslab"), h.GetAssignmentGradeImpact)
+		api.GET("/reports/:id/trace", requireRole("admin", "kalab", "laboran", "aslab"), h.GetReportTraceFlow)
+		api.GET("/submissions/:id", requireRole("admin", "kalab", "laboran", "aslab", "student"), h.GetSubmissionDetail)
 	}
 }
 
@@ -167,7 +206,8 @@ func (h *Handler) GetStudentCourses(c *gin.Context) {
 	respond(c, data, err)
 }
 func (h *Handler) GetAssignments(c *gin.Context) {
-	data, err := h.repo.Assignments()
+	studentID, _ := strconv.Atoi(c.Query("studentId"))
+	data, err := h.repo.Assignments(studentID)
 	respond(c, data, err)
 }
 func (h *Handler) GetGrades(c *gin.Context) { data, err := h.repo.Grades(); respond(c, data, err) }
@@ -200,6 +240,15 @@ func (h *Handler) SubmitAssignment(c *gin.Context) {
 	}
 	err = h.repo.SubmitAssignment(id, &payload)
 	payload.ID = id
+	respond(c, payload, err)
+}
+
+func (h *Handler) SubmitStudentAssignment(c *gin.Context) {
+	var payload models.StudentSubmissionInput
+	if bind(c, &payload) {
+		return
+	}
+	err := h.repo.SubmitStudentAssignment(payload.AssignmentID, payload.StudentID, payload.AnswerText, payload.FileURL, payload.FileName, payload.FileSize)
 	respond(c, payload, err)
 }
 
@@ -536,6 +585,37 @@ func (h *Handler) SubmitMaterial(c *gin.Context) {
 	respond(c, gin.H{"id": id, "status": "submitted"}, h.repo.SubmitMaterial(id, authUser.ID))
 }
 
+func (h *Handler) ApproveMaterial(c *gin.Context) {
+	authUser, _ := currentAuthUser(c)
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	respond(c, gin.H{"id": id, "status": "approved"}, h.repo.ApproveMaterial(id, authUser.ID))
+}
+
+func (h *Handler) RejectMaterial(c *gin.Context) {
+	authUser, _ := currentAuthUser(c)
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	var payload models.ReportActionRequest
+	if bind(c, &payload) {
+		return
+	}
+	respond(c, gin.H{"id": id, "status": "rejected"}, h.repo.RejectMaterial(id, authUser.ID, payload.Note))
+}
+
+func (h *Handler) CreateMaterialMetadata(c *gin.Context) {
+	var payload models.CreateMaterialInput
+	if bind(c, &payload) {
+		return
+	}
+	id, err := h.repo.SaveMaterialFile(payload.CourseID, payload.SessionID, payload.Title, payload.FileURL, payload.FileType, payload.FileSize)
+	created(c, gin.H{"id": id}, err)
+}
+
 func (h *Handler) MaterialFile(c *gin.Context) {
 	authUser, _ := currentAuthUser(c)
 	id, err := pathID(c)
@@ -565,6 +645,35 @@ func (h *Handler) MaterialFile(c *gin.Context) {
 	h.serveUploadFile(c, path)
 }
 
+func (h *Handler) DownloadMaterial(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	var fileURL, title string
+	err = h.repo.DB().QueryRow(`SELECT COALESCE(NULLIF(file_url,''),'/api/files/placeholder.pdf'), title FROM course_materials WHERE id=$1`, id).Scan(&fileURL, &title)
+	if err != nil {
+		fail(c, http.StatusNotFound, "material not found")
+		return
+	}
+	if strings.HasPrefix(fileURL, "/api/files/") {
+		fp := filepath.Base(strings.TrimPrefix(fileURL, "/api/files/"))
+		fullPath := filepath.Join(uploadDir, fp)
+		if _, err := os.Stat(fullPath); err == nil {
+			ext := strings.ToLower(filepath.Ext(fp))
+			mimeType := mime.TypeByExtension(ext)
+			if mimeType == "" {
+				mimeType = "application/octet-stream"
+			}
+			c.Header("Content-Type", mimeType)
+			c.Header("Content-Disposition", "inline; filename=\""+title+"\"")
+			c.File(fullPath)
+			return
+		}
+	}
+	c.Redirect(http.StatusFound, fileURL)
+}
+
 func (h *Handler) GetReports(c *gin.Context) {
 	authUser, _ := currentAuthUser(c)
 	data, err := h.repo.AssistantReportsForRole(authUser.Role, authUser.ID)
@@ -586,9 +695,19 @@ func (h *Handler) ReportFile(c *gin.Context) {
 		}
 		for _, report := range reports {
 			if report.ID == id {
+				doc, docErr := h.repo.ReportDocument(id, authUser.Role, authUser.ID)
+				if docErr != nil {
+					respond(c, nil, docErr)
+					return
+				}
+				pdf, pdfErr := renderReportPDFWithDompdf(doc)
+				if pdfErr != nil {
+					respond(c, nil, pdfErr)
+					return
+				}
 				c.Header("Content-Type", "application/pdf")
-				c.Header("Content-Disposition", `inline; filename="laporan.pdf"`)
-				c.Data(http.StatusOK, "application/pdf", simplePDFBytes(fmt.Sprintf("Laporan %s\nKelas %s\nTopik %s\nStatus %s\nCatatan %s", report.CourseName, report.Class, report.Topic, report.Status, report.RejectionNote)))
+				c.Header("Content-Disposition", `attachment; filename="laporan-praktikum.pdf"`)
+				c.Data(http.StatusOK, "application/pdf", pdf)
 				return
 			}
 		}
@@ -598,6 +717,40 @@ func (h *Handler) ReportFile(c *gin.Context) {
 		return
 	}
 	h.serveUploadFile(c, path)
+}
+
+func (h *Handler) ReportHTML(c *gin.Context) {
+	authUser, _ := currentAuthUser(c)
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	doc, err := h.reportDocumentForUser(id, authUser)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	html, err := renderReportHTML(doc)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.Header("Content-Disposition", `inline; filename="laporan.html"`)
+	c.String(http.StatusOK, html)
+}
+
+func (h *Handler) reportDocumentForUser(id int, authUser models.AuthUser) (*models.ReportDocument, error) {
+	reports, err := h.repo.AssistantReportsForRole(authUser.Role, authUser.ID)
+	if err != nil {
+		return nil, err
+	}
+	for _, report := range reports {
+		if report.ID == id {
+			return h.repo.ReportDocument(id, authUser.Role, authUser.ID)
+		}
+	}
+	return nil, sql.ErrNoRows
 }
 
 func (h *Handler) ApproveReport(c *gin.Context) {
@@ -627,20 +780,34 @@ func (h *Handler) RejectReport(c *gin.Context) {
 }
 
 func (h *Handler) saveUploadedPDF(originalName string, folder string, fileHeader *multipart.FileHeader) (string, error) {
-	dir := filepath.Join(h.uploadDir, folder)
+	if fileHeader.Size > maxUploadSize {
+		return "", fmt.Errorf("ukuran file maksimal 20 MB")
+	}
+	// Validate PDF magic bytes
+	f, err := fileHeader.Open()
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	magic := make([]byte, 4)
+	if _, err := f.Read(magic); err != nil || !bytes.HasPrefix(magic, []byte("%PDF")) {
+		return "", fmt.Errorf("file bukan PDF yang valid")
+	}
+
+	dir := filepath.Join(uploadDir, folder)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", err
 	}
 	name := fmt.Sprintf("%d-%s", time.Now().UnixNano(), safeFileName(originalName))
 	relativePath := filepath.Join(folder, name)
-	fullPath := filepath.Join(h.uploadDir, relativePath)
+	fullPath := filepath.Join(uploadDir, relativePath)
 	return relativePath, saveUploadedFile(fileHeader, fullPath)
 }
 
 func (h *Handler) serveUploadFile(c *gin.Context, relativePath string) {
 	c.Header("Content-Type", "application/pdf")
 	c.Header("Content-Disposition", `inline; filename="file.pdf"`)
-	c.File(filepath.Join(h.uploadDir, relativePath))
+	c.File(filepath.Join(uploadDir, relativePath))
 }
 
 func safeFileName(name string) string {
@@ -680,26 +847,473 @@ func saveUploadedFile(fileHeader *multipart.FileHeader, path string) error {
 	return err
 }
 
+func reportPDFBytes(doc *models.ReportDocument) []byte {
+	report := doc.Report
+	passed := 0
+	for _, student := range doc.Students {
+		if student.Passed {
+			passed++
+		}
+	}
+	failed := len(doc.Students) - passed
+	passRate := 0.0
+	if len(doc.Students) > 0 {
+		passRate = float64(passed) * 100 / float64(len(doc.Students))
+	}
+	averageScore := 0.0
+	for _, student := range doc.Students {
+		averageScore += student.FinalScore
+	}
+	if len(doc.Students) > 0 {
+		averageScore = averageScore / float64(len(doc.Students))
+	}
+	institution := doc.Institution
+
+	lines := []string{
+		"LAPORAN PELAKSANAAN PRAKTIKUM",
+		strings.ToUpper(emptyDash(institution.LaboratoryName)),
+		fmt.Sprintf("%s - %s", emptyDash(doc.AcademicYear), strings.ToUpper(emptyDash(doc.Semester))),
+		"",
+		strings.ToUpper(emptyDash(institution.UniversityName)),
+		emptyDash(institution.FacultyName),
+		emptyDash(institution.StudyProgramName),
+		fmt.Sprintf("Kampus A: %s", emptyDash(institution.CampusAAddress)),
+		fmt.Sprintf("Kampus B: %s", emptyDash(institution.CampusBAddress)),
+		fmt.Sprintf("Website: %s | Email: %s | Telp: %s", emptyDash(institution.Website), emptyDash(institution.Email), emptyDash(institution.Phone)),
+		"",
+		"REKAP PRAKTIKUM",
+		fmt.Sprintf("Mata Kuliah : %s", report.CourseName),
+		fmt.Sprintf("Kode/Kelas  : %s / %s", report.CourseCode, report.Class),
+		fmt.Sprintf("Program     : %s", emptyDash(doc.Program)),
+		fmt.Sprintf("Periode     : %s %s", emptyDash(doc.AcademicYear), emptyDash(doc.Semester)),
+		fmt.Sprintf("SKS         : %d", doc.Credits),
+		fmt.Sprintf("Total Sesi  : %d", doc.TotalSessions),
+		fmt.Sprintf("Sesi        : %d - %s", report.Week, report.Topic),
+		fmt.Sprintf("Asisten     : %s", emptyDash(doc.Assistant)),
+		fmt.Sprintf("Pengajar    : %s", emptyDash(doc.Instructor)),
+		fmt.Sprintf("Status      : %s", report.Status),
+		fmt.Sprintf("Dikirim     : %s", emptyDash(report.SubmittedAt)),
+		"",
+		"RINGKASAN KELULUSAN",
+		"No  Nama Praktikum                         Jml Mhs  Lulus  Tidak Lulus  %Lulus",
+		fmt.Sprintf("1   %-38s %7d %6d %12d %7.0f%%", truncatePDFText(report.CourseName, 38), len(doc.Students), passed, failed, passRate),
+		fmt.Sprintf("Rata-rata Nilai Akhir: %.2f", averageScore),
+		"",
+		"PERSONEL PRAKTIKUM",
+		"No  Nama                           Role          Identifier       Keterangan",
+	}
+	for index, person := range doc.Personnel {
+		lines = append(lines, fmt.Sprintf("%-3d %-30s %-13s %-16s %s",
+			index+1,
+			truncatePDFText(person.Name, 30),
+			truncatePDFText(person.Role, 13),
+			truncatePDFText(person.Identifier, 16),
+			truncatePDFText(person.Note, 30),
+		))
+	}
+	lines = append(lines,
+		"",
+		"LAPORAN PRESENSI, LOG ACTIVITY DAN NILAI AKHIR",
+		"NILAI PERKULIAHAN MAHASISWA",
+		fmt.Sprintf("PRODI   : %s", strings.ToUpper(emptyDash(doc.Program))),
+		fmt.Sprintf("PERIODE : %s %s", emptyDash(doc.AcademicYear), emptyDash(doc.Semester)),
+		fmt.Sprintf("Mata Kuliah : %s", report.CourseName),
+		fmt.Sprintf("Nama Kelas  : %s", report.Class),
+		"",
+		"No  NPM             Nama Mahasiswa                 Presensi Pretest Tugas Praktikum PostTest Nilai Grade Status",
+	)
+	for _, student := range doc.Students {
+		lulus := "Tidak Lulus"
+		if student.Passed {
+			lulus = "Lulus"
+		}
+		lines = append(lines, fmt.Sprintf("%-3d %-15s %-30s %8.2f %7.2f %5.2f %9.2f %8.2f %5.2f %-5s %s",
+			student.No,
+			truncatePDFText(student.NIM, 15),
+			truncatePDFText(student.Name, 30),
+			student.AttendanceScore,
+			student.Pretest,
+			student.AssignmentScore,
+			student.Praktikum,
+			student.Posttest,
+			student.FinalScore,
+			student.Grade,
+			lulus,
+		))
+	}
+
+	lines = append(lines,
+		"",
+		"LAPORAN PERSENTASE PRESENSI MAHASISWA",
+		fmt.Sprintf("Mata Kuliah : %s", report.CourseName),
+		fmt.Sprintf("Nama Kelas  : %s", report.Class),
+		"",
+		"No  NPM             Nama                           Pertemuan Alfa Hadir Ijin Sakit Presentase",
+	)
+	for _, student := range doc.Students {
+		lines = append(lines, fmt.Sprintf("%-3d %-15s %-30s %9d %4d %5d %4d %5d %9.2f",
+			student.No,
+			truncatePDFText(student.NIM, 15),
+			truncatePDFText(student.Name, 30),
+			student.Meetings,
+			student.Absent,
+			student.Present,
+			student.Permit,
+			student.Sick,
+			student.AttendancePercent,
+		))
+	}
+	lines = append(lines,
+		"",
+		"REKAP PRETEST DAN POST-TEST",
+		"No  NPM             Nama                           Avg Pre  Avg Post  Peningkatan  Keterangan",
+	)
+	for _, student := range doc.Students {
+		improvement := student.Posttest - student.Pretest
+		description := "Tetap"
+		if improvement > 0 {
+			description = "Meningkat"
+		} else if improvement < 0 {
+			description = "Menurun"
+		}
+		lines = append(lines, fmt.Sprintf("%-3d %-15s %-30s %7.2f %8.2f %11.2f  %s",
+			student.No,
+			truncatePDFText(student.NIM, 15),
+			truncatePDFText(student.Name, 30),
+			student.Pretest,
+			student.Posttest,
+			improvement,
+			description,
+		))
+	}
+	lines = append(lines,
+		"",
+		"PROGRESS BELAJAR",
+		"No  NPM             Nama                           Presensi Pretest Materi PostTest Progress",
+	)
+	for _, student := range doc.Students {
+		lines = append(lines, fmt.Sprintf("%-3d %-15s %-30s %-8s %-7s %-6s %-8s %7.2f%%",
+			student.No,
+			truncatePDFText(student.NIM, 15),
+			truncatePDFText(student.Name, 30),
+			statusDone(student.Present > 0),
+			statusDone(student.Pretest > 0),
+			statusDone(true),
+			statusDone(student.Posttest > 0),
+			student.Progress,
+		))
+	}
+	lines = append(lines,
+		"",
+		"LOG ACTIVITY",
+		"No  Waktu             Mahasiswa                    Aktivitas       Sesi        Keterangan",
+	)
+	for _, activity := range doc.Activities {
+		lines = append(lines, fmt.Sprintf("%-3d %-17s %-28s %-14s %-10s %s",
+			activity.No,
+			truncatePDFText(activity.Time, 17),
+			truncatePDFText(activity.StudentName, 28),
+			truncatePDFText(activity.Activity, 14),
+			truncatePDFText(activity.SessionName, 10),
+			truncatePDFText(activity.Description, 32),
+		))
+	}
+
+	if strings.TrimSpace(report.RejectionNote) != "" {
+		lines = append(lines, "", "CATATAN PENOLAKAN", report.RejectionNote)
+	}
+	studyProgramSigner := signerByRole(doc.Signers, "head_of_study_program")
+	labSigner := signerByRole(doc.Signers, "head_of_laboratory")
+	lines = append(lines,
+		"",
+		fmt.Sprintf("Jakarta, %s", time.Now().Format("02 January 2006")),
+		"",
+		"Mengetahui,",
+		fmt.Sprintf("Ka. Program Studi %-25s Ka. Laboratorium %s", truncatePDFText(emptyDash(institution.StudyProgramName), 25), emptyDash(institution.LaboratoryName)),
+		"",
+		"",
+		"",
+		fmt.Sprintf("%-40s %s", emptyDash(studyProgramSigner.Name), emptyDash(labSigner.Name)),
+		fmt.Sprintf("%s: %-34s %s: %s", emptyDash(studyProgramSigner.IdentifierType), emptyDash(studyProgramSigner.IdentifierNumber), emptyDash(labSigner.IdentifierType), emptyDash(labSigner.IdentifierNumber)),
+	)
+	return simplePDFBytes(strings.Join(lines, "\n"))
+}
+
+type reportHTMLView struct {
+	Doc          *models.ReportDocument
+	Passed       int
+	Failed       int
+	PassRate     float64
+	AverageScore float64
+	GeneratedAt  string
+	Kaprodi      models.ReportSigner
+	Kalab        models.ReportSigner
+}
+
+func renderReportHTML(doc *models.ReportDocument) (string, error) {
+	view := reportHTMLView{
+		Doc:         doc,
+		GeneratedAt: time.Now().Format("2006-01-02"),
+		Kaprodi:     signerByRole(doc.Signers, "head_of_study_program"),
+		Kalab:       signerByRole(doc.Signers, "head_of_laboratory"),
+	}
+	for _, student := range doc.Students {
+		if student.Passed {
+			view.Passed++
+		}
+		view.AverageScore += student.FinalScore
+	}
+	view.Failed = len(doc.Students) - view.Passed
+	if len(doc.Students) > 0 {
+		view.PassRate = float64(view.Passed) * 100 / float64(len(doc.Students))
+		view.AverageScore = view.AverageScore / float64(len(doc.Students))
+	}
+
+	tpl, err := template.New("report").Funcs(template.FuncMap{
+		"dash":  emptyDash,
+		"upper": strings.ToUpper,
+		"status": func(passed bool) string {
+			if passed {
+				return "Lulus"
+			}
+			return "Tidak Lulus"
+		},
+		"done": statusDone,
+		"improvementText": func(value float64) string {
+			if value > 0 {
+				return "Meningkat"
+			}
+			if value < 0 {
+				return "Menurun"
+			}
+			return "Tetap"
+		},
+		"minus": func(a float64, b float64) float64 { return a - b },
+		"add":   func(a int, b int) int { return a + b },
+	}).Parse(reportHTMLTemplate)
+	if err != nil {
+		return "", err
+	}
+	var out bytes.Buffer
+	if err := tpl.Execute(&out, view); err != nil {
+		return "", err
+	}
+	return out.String(), nil
+}
+
+func renderReportPDFWithDompdf(doc *models.ReportDocument) ([]byte, error) {
+	html, err := renderReportHTML(doc)
+	if err != nil {
+		return nil, err
+	}
+	scriptPath := filepath.Join("scripts", "render_report_pdf.php")
+	command := exec.Command("php", scriptPath)
+	command.Stdin = strings.NewReader(html)
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	output, err := command.Output()
+	if err != nil {
+		message := strings.TrimSpace(stderr.String())
+		if message == "" {
+			message = err.Error()
+		}
+		return nil, fmt.Errorf("render dompdf: %s", message)
+	}
+	if len(output) == 0 {
+		return nil, errors.New("render dompdf: empty pdf output")
+	}
+	return output, nil
+}
+
+const reportHTMLTemplate = `<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <title>{{.Doc.Report.CourseName}} - Laporan Praktikum</title>
+  <style>
+    body{font-family:Arial,sans-serif;color:#111827;margin:32px;line-height:1.35}
+    .cover{text-align:center;margin-bottom:28px}
+    h1{font-size:24px;margin:0 0 8px;text-transform:uppercase}
+    h2{font-size:16px;margin:24px 0 8px;text-transform:uppercase}
+    h3{font-size:14px;margin:18px 0 8px}
+    .muted{color:#4b5563;font-size:12px}
+    table{width:100%;border-collapse:collapse;margin:8px 0 18px;font-size:11px}
+    th,td{border:1px solid #d1d5db;padding:6px;vertical-align:top}
+    th{background:#f3f4f6;text-align:left}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}
+    .no-border td{border:0;padding:3px 0}
+    .signatures{display:grid;grid-template-columns:1fr 1fr;gap:48px;margin-top:32px;text-align:center}
+    .signature-space{height:70px}
+    @media print{body{margin:18mm}.page-break{page-break-before:always}}
+  </style>
+</head>
+<body>
+  <section class="cover">
+    <h1>Laporan Pelaksanaan Praktikum</h1>
+    <div>{{upper (dash .Doc.Institution.LaboratoryName)}}</div>
+    <div>{{dash .Doc.AcademicYear}} - {{upper (dash .Doc.Semester)}}</div>
+  </section>
+
+  <section>
+    <h2>{{dash .Doc.Institution.UniversityName}}</h2>
+    <div>{{dash .Doc.Institution.FacultyName}} - {{dash .Doc.Institution.StudyProgramName}}</div>
+    <div class="muted">Kampus A: {{dash .Doc.Institution.CampusAAddress}}</div>
+    <div class="muted">Kampus B: {{dash .Doc.Institution.CampusBAddress}}</div>
+    <div class="muted">{{dash .Doc.Institution.Website}} | {{dash .Doc.Institution.Email}} | {{dash .Doc.Institution.Phone}}</div>
+  </section>
+
+  <section>
+    <h2>Informasi Praktikum</h2>
+    <table class="no-border">
+      <tr><td>Mata Kuliah / Praktikum</td><td>: {{.Doc.Report.CourseName}}</td></tr>
+      <tr><td>Kode / Kelas</td><td>: {{.Doc.Report.CourseCode}} / {{.Doc.Report.Class}}</td></tr>
+      <tr><td>SKS</td><td>: {{.Doc.Credits}}</td></tr>
+      <tr><td>Periode</td><td>: {{dash .Doc.AcademicYear}} {{dash .Doc.Semester}}</td></tr>
+      <tr><td>Total Sesi</td><td>: {{.Doc.TotalSessions}}</td></tr>
+      <tr><td>Generated At</td><td>: {{.GeneratedAt}}</td></tr>
+      <tr><td>Generated By</td><td>: {{dash .Doc.Assistant}}</td></tr>
+      <tr><td>Status Approval</td><td>: {{.Doc.Report.Status}}</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>Rekap Jumlah Praktikan</h2>
+    <table>
+      <thead><tr><th>No</th><th>Nama Praktikum</th><th>Kelas</th><th>Jumlah Mahasiswa</th><th>Lulus</th><th>Tidak Lulus</th><th>% Lulus</th><th>Rata-rata</th></tr></thead>
+      <tbody><tr><td>1</td><td>{{.Doc.Report.CourseName}}</td><td>{{.Doc.Report.Class}}</td><td>{{len .Doc.Students}}</td><td>{{.Passed}}</td><td>{{.Failed}}</td><td>{{printf "%.2f" .PassRate}}%</td><td>{{printf "%.2f" .AverageScore}}</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Data Pengajar / Laboran / Kalab / Aslab</h2>
+    <table>
+      <thead><tr><th>No</th><th>Nama</th><th>Role</th><th>NIDN/NPM/NIP</th><th>Keterangan</th></tr></thead>
+      <tbody>{{range $i, $p := .Doc.Personnel}}<tr><td>{{printf "%d" (add $i 1)}}</td><td>{{$p.Name}}</td><td>{{$p.Role}}</td><td>{{$p.Identifier}}</td><td>{{$p.Note}}</td></tr>{{end}}</tbody>
+    </table>
+  </section>
+
+  <section class="page-break">
+    <h2>Laporan Presensi, Log Activity dan Nilai Akhir</h2>
+    <h3>Nilai Akhir Mahasiswa</h3>
+    <table>
+      <thead><tr><th>No</th><th>NPM</th><th>Nama Mahasiswa</th><th>Presensi</th><th>Pretest</th><th>Tugas</th><th>Praktikum</th><th>Post-Test</th><th>Nilai Akhir</th><th>Grade</th><th>Status</th></tr></thead>
+      <tbody>{{range .Doc.Students}}<tr><td>{{.No}}</td><td>{{.NIM}}</td><td>{{.Name}}</td><td>{{printf "%.2f" .AttendanceScore}}</td><td>{{printf "%.2f" .Pretest}}</td><td>{{printf "%.2f" .AssignmentScore}}</td><td>{{printf "%.2f" .Praktikum}}</td><td>{{printf "%.2f" .Posttest}}</td><td>{{printf "%.2f" .FinalScore}}</td><td>{{.Grade}}</td><td>{{status .Passed}}</td></tr>{{end}}</tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Presensi Mahasiswa</h2>
+    <table>
+      <thead><tr><th>No</th><th>NPM</th><th>Nama Mahasiswa</th><th>Pertemuan</th><th>Alfa</th><th>Hadir</th><th>Izin</th><th>Sakit</th><th>Persentase</th></tr></thead>
+      <tbody>{{range .Doc.Students}}<tr><td>{{.No}}</td><td>{{.NIM}}</td><td>{{.Name}}</td><td>{{.Meetings}}</td><td>{{.Absent}}</td><td>{{.Present}}</td><td>{{.Permit}}</td><td>{{.Sick}}</td><td>{{printf "%.2f" .AttendancePercent}}%</td></tr>{{end}}</tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Rekap Pretest dan Post-Test</h2>
+    <table>
+      <thead><tr><th>No</th><th>NPM</th><th>Nama Mahasiswa</th><th>Rata-rata Pretest</th><th>Rata-rata Post-Test</th><th>Peningkatan</th><th>Keterangan</th></tr></thead>
+      <tbody>{{range .Doc.Students}}{{ $imp := minus .Posttest .Pretest }}<tr><td>{{.No}}</td><td>{{.NIM}}</td><td>{{.Name}}</td><td>{{printf "%.2f" .Pretest}}</td><td>{{printf "%.2f" .Posttest}}</td><td>{{printf "%.2f" $imp}}</td><td>{{improvementText $imp}}</td></tr>{{end}}</tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Progress Belajar</h2>
+    <table>
+      <thead><tr><th>No</th><th>NPM</th><th>Nama Mahasiswa</th><th>Presensi</th><th>Pretest</th><th>Materi</th><th>Post-Test</th><th>Progress</th></tr></thead>
+      <tbody>{{range .Doc.Students}}<tr><td>{{.No}}</td><td>{{.NIM}}</td><td>{{.Name}}</td><td>{{done (gt .Present 0)}}</td><td>{{done (gt .Pretest 0.0)}}</td><td>Selesai</td><td>{{done (gt .Posttest 0.0)}}</td><td>{{printf "%.2f" .Progress}}%</td></tr>{{end}}</tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Log Activity</h2>
+    <table>
+      <thead><tr><th>No</th><th>Waktu</th><th>Mahasiswa</th><th>Aktivitas</th><th>Kursus</th><th>Sesi</th><th>Keterangan</th></tr></thead>
+      <tbody>{{range .Doc.Activities}}<tr><td>{{.No}}</td><td>{{.Time}}</td><td>{{.StudentName}}</td><td>{{.Activity}}</td><td>{{.CourseName}}</td><td>{{.SessionName}}</td><td>{{.Description}}</td></tr>{{end}}</tbody>
+    </table>
+  </section>
+
+  {{if .Doc.Report.RejectionNote}}<section><h2>Catatan Penolakan</h2><p>{{.Doc.Report.RejectionNote}}</p></section>{{end}}
+
+  <section class="signatures">
+    <div><p>Ka. Program Studi {{dash .Doc.Institution.StudyProgramName}}</p><div class="signature-space"></div><strong>{{dash .Kaprodi.Name}}</strong><p>{{dash .Kaprodi.IdentifierType}}: {{dash .Kaprodi.IdentifierNumber}}</p></div>
+    <div><p>Ka. Laboratorium {{dash .Doc.Institution.LaboratoryName}}</p><div class="signature-space"></div><strong>{{dash .Kalab.Name}}</strong><p>{{dash .Kalab.IdentifierType}}: {{dash .Kalab.IdentifierNumber}}</p></div>
+  </section>
+</body>
+</html>`
+
+func statusDone(done bool) string {
+	if done {
+		return "Selesai"
+	}
+	return "Belum"
+}
+
+func signerByRole(signers []models.ReportSigner, role string) models.ReportSigner {
+	for _, signer := range signers {
+		if strings.EqualFold(signer.Role, role) {
+			return signer
+		}
+	}
+	return models.ReportSigner{IdentifierType: "NIDN"}
+}
+
+func emptyDash(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	return value
+}
+
+func truncatePDFText(value string, max int) string {
+	value = strings.Join(strings.Fields(value), " ")
+	if len(value) <= max {
+		return value
+	}
+	if max <= 3 {
+		return value[:max]
+	}
+	return value[:max-3] + "..."
+}
+
 func simplePDFBytes(text string) []byte {
 	escaped := strings.ReplaceAll(text, "\\", "\\\\")
 	escaped = strings.ReplaceAll(escaped, "(", "\\(")
 	escaped = strings.ReplaceAll(escaped, ")", "\\)")
 	lines := strings.Split(escaped, "\n")
-	content := "BT /F1 12 Tf 50 780 Td "
-	for index, line := range lines {
-		if index > 0 {
-			content += "0 -18 Td "
+	linesPerPage := 42
+	contents := []string{}
+	for start := 0; start < len(lines); start += linesPerPage {
+		end := start + linesPerPage
+		if end > len(lines) {
+			end = len(lines)
 		}
-		content += "(" + line + ") Tj "
+		content := "BT /F1 9 Tf 35 800 Td "
+		for index, line := range lines[start:end] {
+			if index > 0 {
+				content += "0 -15 Td "
+			}
+			content += "(" + line + ") Tj "
+		}
+		content += "ET"
+		contents = append(contents, content)
 	}
-	content += "ET"
+
+	kids := []string{}
 	objects := []string{
 		"<< /Type /Catalog /Pages 2 0 R >>",
-		"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
-		"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
 		"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
-		fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content),
 	}
+	for index, content := range contents {
+		pageObjectID := 4 + index*2
+		contentObjectID := pageObjectID + 1
+		kids = append(kids, fmt.Sprintf("%d 0 R", pageObjectID))
+		objects = append(objects,
+			fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents %d 0 R >>", contentObjectID),
+			fmt.Sprintf("<< /Length %d >>\nstream\n%s\nendstream", len(content), content),
+		)
+	}
+	objects = append(objects[:1], append([]string{fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(contents))}, objects[1:]...)...)
 	pdf := "%PDF-1.4\n"
 	offsets := []int{0}
 	for i, obj := range objects {
@@ -720,6 +1334,19 @@ func (h *Handler) CreateSessionAssignment(c *gin.Context) {
 	if bind(c, &payload) {
 		return
 	}
+	if payload.SessionID == 0 {
+		if raw := c.Param("id"); raw != "" {
+			sessionID, err := strconv.Atoi(raw)
+			if err != nil {
+				fail(c, http.StatusBadRequest, "invalid id")
+				return
+			}
+			payload.SessionID = sessionID
+		}
+	}
+	if payload.Deadline == "" {
+		payload.Deadline = payload.DueDate
+	}
 	err := h.repo.CreateSessionAssignment(&payload)
 	created(c, payload, err)
 }
@@ -733,6 +1360,9 @@ func (h *Handler) UpdateSessionAssignment(c *gin.Context) {
 	if bind(c, &payload) {
 		return
 	}
+	if payload.Deadline == "" {
+		payload.Deadline = payload.DueDate
+	}
 	err = h.repo.UpdateSessionAssignment(id, &payload)
 	respond(c, payload, err)
 }
@@ -745,7 +1375,6 @@ func (h *Handler) DeleteSessionAssignment(c *gin.Context) {
 	err = h.repo.DeleteSessionAssignment(id)
 	respond(c, gin.H{"id": id}, err)
 }
-
 func (h *Handler) UpdateStudentGrade(c *gin.Context) {
 	id, err := pathID(c)
 	if err != nil {
@@ -784,6 +1413,34 @@ func (h *Handler) ApproveAssistantReport(c *gin.Context) {
 	if err != nil {
 		return
 	}
+
+	// Get lecturer name from header
+	lecturerName := c.GetHeader("X-Lecturer-Name")
+	if lecturerName == "" {
+		fail(c, http.StatusUnauthorized, "lecturer name not provided")
+		return
+	}
+
+	// Get report with course info
+	report, err := h.repo.GetAssistantReportWithCourse(id)
+	if err != nil {
+		fail(c, http.StatusNotFound, "report not found")
+		return
+	}
+
+	// Get course lecturer
+	courseLecturer, err := h.repo.GetCourseLecturer(report["courseCode"].(string))
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "failed to get course lecturer")
+		return
+	}
+
+	// Check if current lecturer is the course lecturer
+	if lecturerName != courseLecturer {
+		fail(c, http.StatusForbidden, "only the course lecturer can approve this report")
+		return
+	}
+
 	respond(c, gin.H{"id": id}, h.repo.SetAssistantReportStatus(id, "Disetujui"))
 }
 func (h *Handler) RejectAssistantReport(c *gin.Context) {
@@ -791,7 +1448,300 @@ func (h *Handler) RejectAssistantReport(c *gin.Context) {
 	if err != nil {
 		return
 	}
-	respond(c, gin.H{"id": id}, h.repo.SetAssistantReportStatus(id, "Ditolak"))
+
+	// Get lecturer name from header
+	lecturerName := c.GetHeader("X-Lecturer-Name")
+	if lecturerName == "" {
+		fail(c, http.StatusUnauthorized, "lecturer name not provided")
+		return
+	}
+
+	// Get report with course info
+	report, err := h.repo.GetAssistantReportWithCourse(id)
+	if err != nil {
+		fail(c, http.StatusNotFound, "report not found")
+		return
+	}
+
+	// Get course lecturer
+	courseLecturer, err := h.repo.GetCourseLecturer(report["courseCode"].(string))
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "failed to get course lecturer")
+		return
+	}
+
+	// Check if current lecturer is the course lecturer
+	if lecturerName != courseLecturer {
+		fail(c, http.StatusForbidden, "only the course lecturer can reject this report")
+		return
+	}
+
+	var payload models.RejectReportInput
+	_ = c.ShouldBindJSON(&payload)
+	respond(c, gin.H{"id": id}, h.repo.RejectAssistantReportWithNote(id, payload.RejectionNote))
+}
+
+func (h *Handler) GetAssignmentSubmissions(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.GetAssignmentSubmissions(id)
+	respond(c, data, err)
+}
+
+func (h *Handler) GetSessionStudents(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.GetSessionStudents(id)
+	respond(c, data, err)
+}
+
+func (h *Handler) GradeStudentSubmission(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	var payload struct {
+		Score    int    `json:"score"`
+		Feedback string `json:"feedback"`
+	}
+	if bind(c, &payload) {
+		return
+	}
+	fmt.Printf("[GradeStudentSubmission] Saving grade - submissionID: %d, score: %d, feedback: %s\n", id, payload.Score, payload.Feedback)
+	err = h.repo.GradeStudentSubmission(id, payload.Score, payload.Feedback)
+	if err == nil {
+		fmt.Printf("[GradeStudentSubmission] Syncing to report - submissionID: %d\n", id)
+		syncErr := h.repo.SyncSubmissionGradeToReport(id)
+		if syncErr != nil {
+			fmt.Printf("[GradeStudentSubmission] Sync error: %v\n", syncErr)
+		} else {
+			fmt.Printf("[GradeStudentSubmission] Sync success\n")
+		}
+	}
+	respond(c, gin.H{"id": id, "score": payload.Score}, err)
+}
+
+func (h *Handler) UpsertAssistantSessionAttendance(c *gin.Context) {
+	sessionID, err := pathID(c)
+	if err != nil {
+		return
+	}
+	var payload models.AssistantSessionAttendance
+	if bind(c, &payload) {
+		return
+	}
+	respond(c, payload, h.repo.UpsertAssistantSessionAttendance(sessionID, &payload))
+}
+
+func (h *Handler) GetAssistantSessionAttendance(c *gin.Context) {
+	sessionID, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.GetAssistantSessionAttendance(sessionID)
+	respond(c, data, err)
+}
+
+func (h *Handler) GetCourseSessions(c *gin.Context) {
+	courseID, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.GetCourseSessions(courseID)
+	respond(c, data, err)
+}
+
+func (h *Handler) UpdateCourseSession(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	var payload models.UpdateSessionInput
+	if bind(c, &payload) {
+		return
+	}
+	respond(c, gin.H{"id": id}, h.repo.UpdateCourseSession(id, &payload))
+}
+
+func (h *Handler) ExportReportsXLSX(c *gin.Context) {
+	rows, err := h.repo.ExportReportsData()
+	if err != nil {
+		fail(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+	f := excelize.NewFile()
+	sheet := "Laporan"
+	f.SetSheetName("Sheet1", sheet)
+	headers := []string{"No", "Kode Kursus", "Nama Kursus", "Kelas", "Sesi", "Topik", "NIM Aslab", "Nama Aslab", "Tanggal Kirim", "Status", "Nilai", "Catatan Penolakan"}
+	for i, h := range headers {
+		cell, _ := excelize.CoordinatesToCellName(i+1, 1)
+		f.SetCellValue(sheet, cell, h)
+	}
+	for i, r := range rows {
+		row := i + 2
+		f.SetCellValue(sheet, cellName(1, row), i+1)
+		f.SetCellValue(sheet, cellName(2, row), r["courseCode"])
+		f.SetCellValue(sheet, cellName(3, row), r["courseName"])
+		f.SetCellValue(sheet, cellName(4, row), r["class"])
+		f.SetCellValue(sheet, cellName(5, row), r["week"])
+		f.SetCellValue(sheet, cellName(6, row), r["topic"])
+		f.SetCellValue(sheet, cellName(7, row), r["nim"])
+		f.SetCellValue(sheet, cellName(8, row), r["name"])
+		f.SetCellValue(sheet, cellName(9, row), r["submittedAt"])
+		f.SetCellValue(sheet, cellName(10, row), r["status"])
+		f.SetCellValue(sheet, cellName(11, row), r["score"])
+		f.SetCellValue(sheet, cellName(12, row), r["rejectionNote"])
+	}
+	c.Header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+	c.Header("Content-Disposition", "attachment; filename=\"laporan-"+time.Now().Format("2006-01-02")+".xlsx\"")
+	f.Write(c.Writer)
+}
+
+func cellName(col, row int) string {
+	n, _ := excelize.CoordinatesToCellName(col, row)
+	return n
+}
+
+var uploadDir = resolveUploadDir()
+
+func resolveUploadDir() string {
+	for _, dir := range []string{"./uploads", "/tmp/studiku-uploads"} {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			continue
+		}
+		// Verify we can actually write to the directory
+		tmp, err := os.CreateTemp(dir, ".write-check-*")
+		if err != nil {
+			continue
+		}
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return dir
+	}
+	return "/tmp/studiku-uploads" // last resort
+}
+
+const maxUploadSize = 20 * 1024 * 1024 // 20 MB
+
+var allowedUploadExts = map[string]bool{
+	".pdf":  true,
+	".doc":  true,
+	".docx": true,
+	".xls":  true,
+	".xlsx": true,
+	".ppt":  true,
+	".pptx": true,
+	".png":  true,
+	".jpg":  true,
+	".jpeg": true,
+}
+
+func (h *Handler) UploadFile(c *gin.Context) {
+	if c.Request.ContentLength > maxUploadSize {
+		fail(c, http.StatusRequestEntityTooLarge, "ukuran file maksimal 20 MB")
+		return
+	}
+	file, header, err := c.Request.FormFile("file")
+	if err != nil {
+		fail(c, http.StatusBadRequest, "file wajib diupload")
+		return
+	}
+	defer file.Close()
+
+	if header.Size > maxUploadSize {
+		fail(c, http.StatusRequestEntityTooLarge, "ukuran file maksimal 20 MB")
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(filepath.Base(header.Filename)))
+	if !allowedUploadExts[ext] {
+		fail(c, http.StatusBadRequest, "tipe file tidak diizinkan")
+		return
+	}
+
+	// Read magic bytes to validate actual file type
+	buf := make([]byte, 512)
+	n, _ := file.Read(buf)
+	buf = buf[:n]
+	detected := http.DetectContentType(buf)
+	if ext == ".pdf" && !strings.HasPrefix(detected, "application/pdf") && !bytes.HasPrefix(buf, []byte("%PDF")) {
+		fail(c, http.StatusBadRequest, "file bukan PDF yang valid")
+		return
+	}
+	// Seek back to start
+	if seeker, ok := file.(io.Seeker); ok {
+		seeker.Seek(0, io.SeekStart)
+	}
+
+	if err := os.MkdirAll(uploadDir, 0755); err != nil {
+		fail(c, http.StatusInternalServerError, "cannot create upload dir")
+		return
+	}
+
+	filename := fmt.Sprintf("%d%s", time.Now().UnixNano(), ext)
+	dst := filepath.Join(uploadDir, filename)
+
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0644)
+	if err != nil {
+		fail(c, http.StatusInternalServerError, "cannot save file")
+		return
+	}
+	defer out.Close()
+	if _, err := io.Copy(out, file); err != nil {
+		os.Remove(dst)
+		fail(c, http.StatusInternalServerError, "cannot write file")
+		return
+	}
+
+	fileURL := "/api/files/" + filename
+	size := fmt.Sprintf("%.1f MB", float64(header.Size)/1024/1024)
+	if header.Size < 1024*1024 {
+		size = fmt.Sprintf("%.0f KB", float64(header.Size)/1024)
+	}
+
+	ok(c, "uploaded", gin.H{
+		"fileUrl":  fileURL,
+		"fileName": header.Filename,
+		"fileSize": size,
+		"mimeType": detected,
+	})
+}
+
+func (h *Handler) ServeFile(c *gin.Context) {
+	fp := c.Param("filepath")
+	// Allow only safe filenames — no path separators
+	fp = filepath.Base(fp)
+	if fp == "." || fp == "/" {
+		fail(c, http.StatusBadRequest, "invalid file")
+		return
+	}
+	fullPath := filepath.Join(uploadDir, fp)
+	// Confirm resolved path is still within uploadDir
+	absUpload, _ := filepath.Abs(uploadDir)
+	absFile, _ := filepath.Abs(fullPath)
+	if !strings.HasPrefix(absFile, absUpload+string(os.PathSeparator)) {
+		fail(c, http.StatusForbidden, "akses ditolak")
+		return
+	}
+
+	ext := strings.ToLower(filepath.Ext(fp))
+	mimeType := mime.TypeByExtension(ext)
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	if _, err := os.Stat(fullPath); err != nil {
+		fail(c, http.StatusNotFound, "file tidak ditemukan")
+		return
+	}
+
+	c.Header("Content-Type", mimeType)
+	c.Header("Content-Disposition", `inline; filename="`+safeFileName(fp)+`"`)
+	c.File(fullPath)
 }
 func (h *Handler) GetReportWorkflow(c *gin.Context) {
 	data, err := h.repo.ReportWorkflow()
@@ -854,6 +1804,145 @@ func (h *Handler) UpdateCourseSessionAttendance(c *gin.Context) {
 	respond(c, payload, h.repo.UpdateCourseSessionAttendance(id, &payload))
 }
 
+func (h *Handler) UpdateStudentAttendanceByCourseSession(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	var payload models.AssistantAttendanceUpdate
+	if bind(c, &payload) {
+		return
+	}
+	respond(c, payload, h.repo.UpsertStudentAttendanceByCourseSession(id, &payload))
+}
+
+func (h *Handler) GetSessionAssessments(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.SessionAssessments(id)
+	respond(c, data, err)
+}
+
+func (h *Handler) UpsertSessionAssessment(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	var payload models.SessionAssessmentInput
+	if bind(c, &payload) {
+		return
+	}
+	data, err := h.repo.UpsertSessionAssessment(id, &payload)
+	respond(c, data, err)
+}
+
+func (h *Handler) UpsertStudentSessionAssessment(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	authUser, _ := currentAuthUser(c)
+	var payload models.StudentSessionAssessmentInput
+	if bind(c, &payload) {
+		return
+	}
+	data, err := h.repo.UpsertStudentSessionAssessment(id, authUser.ID, &payload)
+	respond(c, data, err)
+}
+
+func (h *Handler) GetAssistantSessionPretest(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	authUser, _ := currentAuthUser(c)
+	data, err := h.repo.SessionPretest(id, authUser.ID, authUser.Role)
+	respond(c, data, err)
+}
+
+func (h *Handler) GetStudentSessionPretest(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	authUser, _ := currentAuthUser(c)
+	data, err := h.repo.SessionPretest(id, authUser.ID, authUser.Role)
+	respond(c, data, err)
+}
+
+func (h *Handler) CreatePretestQuestion(c *gin.Context) {
+	sessionID, err := pathID(c)
+	if err != nil {
+		return
+	}
+	authUser, _ := currentAuthUser(c)
+	var payload models.PretestQuestionInput
+	if bind(c, &payload) {
+		return
+	}
+	data, err := h.repo.CreatePretestQuestion(sessionID, authUser.ID, &payload)
+	respond(c, data, err)
+}
+
+func (h *Handler) UpdatePretestQuestion(c *gin.Context) {
+	_, err := pathID(c)
+	if err != nil {
+		return
+	}
+	questionID, err := pathParamID(c, "questionId")
+	if err != nil {
+		return
+	}
+	var payload models.PretestQuestionInput
+	if bind(c, &payload) {
+		return
+	}
+	data, err := h.repo.UpdatePretestQuestion(questionID, &payload)
+	respond(c, data, err)
+}
+
+func (h *Handler) DeletePretestQuestion(c *gin.Context) {
+	_, err := pathID(c)
+	if err != nil {
+		return
+	}
+	questionID, err := pathParamID(c, "questionId")
+	if err != nil {
+		return
+	}
+	err = h.repo.DeletePretestQuestion(questionID)
+	respond(c, gin.H{"id": questionID}, err)
+}
+
+func (h *Handler) SubmitStudentPretest(c *gin.Context) {
+	sessionID, err := pathID(c)
+	if err != nil {
+		return
+	}
+	authUser, _ := currentAuthUser(c)
+	var payload models.PretestSubmissionInput
+	if bind(c, &payload) {
+		return
+	}
+	data, err := h.repo.SubmitPretest(sessionID, authUser.ID, &payload)
+	respond(c, data, err)
+}
+
+func (h *Handler) UpsertAssistantStudentSessionAssessment(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	var payload models.StudentSessionAssessmentInput
+	if bind(c, &payload) {
+		return
+	}
+	data, err := h.repo.UpsertStudentSessionAssessment(id, payload.StudentID, &payload)
+	respond(c, data, err)
+}
+
 func bind(c *gin.Context, out interface{}) bool {
 	if err := c.ShouldBindJSON(out); err != nil {
 		fail(c, http.StatusBadRequest, err.Error())
@@ -863,6 +1952,15 @@ func bind(c *gin.Context, out interface{}) bool {
 }
 func pathID(c *gin.Context) (int, error) {
 	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		fail(c, http.StatusBadRequest, "invalid id")
+		return 0, err
+	}
+	return id, nil
+}
+
+func pathParamID(c *gin.Context, name string) (int, error) {
+	id, err := strconv.Atoi(c.Param(name))
 	if err != nil {
 		fail(c, http.StatusBadRequest, "invalid id")
 		return 0, err
@@ -888,4 +1986,54 @@ func ok(c *gin.Context, msg string, data interface{}) {
 }
 func fail(c *gin.Context, status int, message string) {
 	c.JSON(status, models.APIResponse{Success: false, Error: message})
+}
+
+// GetAssignmentTraceFlow returns trace flow of assignment submissions
+func (h *Handler) GetAssignmentTraceFlow(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.GetAssignmentTraceFlow(id)
+	respond(c, data, err)
+}
+
+// GetAssignmentStats returns statistics for an assignment
+func (h *Handler) GetAssignmentStats(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.GetAssignmentStats(id)
+	respond(c, data, err)
+}
+
+// GetAssignmentGradeImpact returns impact of assignment scores on student grades
+func (h *Handler) GetAssignmentGradeImpact(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.GetAssignmentGradeImpact(id)
+	respond(c, data, err)
+}
+
+// GetReportTraceFlow returns trace flow of assistant reports with grade impact
+func (h *Handler) GetReportTraceFlow(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.GetReportTraceFlow(id)
+	respond(c, data, err)
+}
+
+// GetSubmissionDetail returns detail of a single submission
+func (h *Handler) GetSubmissionDetail(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.GetSubmissionDetail(id)
+	respond(c, data, err)
 }

@@ -31,7 +31,7 @@ func (r *Repository) PageData(key string) (json.RawMessage, error) {
 	return json.RawMessage(payload), nil
 }
 
-func (r *Repository) StudentCourseDetail(courseID int) (json.RawMessage, error) {
+func (r *Repository) StudentCourseDetail(courseID int, studentID int) (json.RawMessage, error) {
 	var payload []byte
 	if err := r.db.QueryRow(`
 		SELECT json_build_object(
@@ -40,16 +40,19 @@ func (r *Repository) StudentCourseDetail(courseID int) (json.RawMessage, error) 
 					'id',id,'title',title,'week',COALESCE(week,0),'status',status,'fileUrl','/api/materials/' || id || '/file'
 				) ORDER BY id)
 				FROM course_materials
-				WHERE course_id=$1 AND deleted_at IS NULL AND status IN ('submitted','available')
+				WHERE course_id=$1 AND deleted_at IS NULL AND status IN ('submitted','available','approved')
 			), '[]'::json),
 			'courseSessions', COALESCE((
 				SELECT json_agg(json_build_object(
 					'id',id,'sessionName',title,'topic',topic,'date',session_date,'time',session_time,
 					'type',session_type,'conferenceLink',conference_link,
+					'pretest', COALESCE((SELECT json_build_object('id',sar.id,'title',COALESCE(sa.title,'Pretest'),'score',sar.score,'maxScore',sar.max_score,'status',sar.status,'note',sar.note) FROM session_assessment_results sar LEFT JOIN session_assessments sa ON sa.session_id=sar.session_id AND sa.assessment_type=sar.assessment_type WHERE sar.session_id=course_sessions.id AND sar.student_id=$2 AND sar.assessment_type='pretest'), json_build_object('title','Pretest','score',NULL,'maxScore',100,'status','not_started')),
+					'posttest', COALESCE((SELECT json_build_object('id',sar.id,'title',COALESCE(sa.title,'Post-test'),'score',sar.score,'maxScore',sar.max_score,'status',sar.status,'note',sar.note) FROM session_assessment_results sar LEFT JOIN session_assessments sa ON sa.session_id=sar.session_id AND sa.assessment_type=sar.assessment_type WHERE sar.session_id=course_sessions.id AND sar.student_id=$2 AND sar.assessment_type='posttest'), json_build_object('title','Post-test','score',NULL,'maxScore',100,'status','not_started')),
 					'progress', (
-						(CASE WHEN EXISTS (SELECT 1 FROM attendance_records ar JOIN attendance_sessions ats ON ats.id=ar.session_id WHERE ats.course_code=(SELECT class_code FROM courses WHERE id=$1) AND ats.session_number=course_sessions.session_number) THEN 33 ELSE 0 END) +
-						(CASE WHEN EXISTS (SELECT 1 FROM course_materials cm WHERE cm.session_id=course_sessions.id AND cm.deleted_at IS NULL AND cm.status IN ('submitted','available')) THEN 33 ELSE 0 END) +
-						(CASE WHEN EXISTS (SELECT 1 FROM session_assignments sa WHERE sa.session_id=course_sessions.id AND sa.status IN ('submitted','graded','Selesai')) THEN 34 ELSE 0 END)
+						(CASE WHEN EXISTS (SELECT 1 FROM session_assessment_results sar WHERE sar.session_id=course_sessions.id AND sar.student_id=$2 AND sar.assessment_type='pretest' AND sar.status='completed') THEN 25 ELSE 0 END) +
+						(CASE WHEN EXISTS (SELECT 1 FROM course_materials cm WHERE cm.session_id=course_sessions.id AND cm.deleted_at IS NULL AND cm.status IN ('submitted','available','approved')) THEN 25 ELSE 0 END) +
+						(CASE WHEN EXISTS (SELECT 1 FROM session_assessment_results sar WHERE sar.session_id=course_sessions.id AND sar.student_id=$2 AND sar.assessment_type='posttest' AND sar.status='completed') THEN 25 ELSE 0 END) +
+						(CASE WHEN EXISTS (SELECT 1 FROM attendance_records ar JOIN attendance_sessions ats ON ats.id=ar.session_id JOIN students st ON st.student_id=ar.nim WHERE st.id=$2 AND ats.course_code=(SELECT class_code FROM courses WHERE id=$1) AND ats.session_number=course_sessions.session_number AND ar.status='Hadir') THEN 25 ELSE 0 END)
 					)
 				) ORDER BY session_number)
 				FROM course_sessions
@@ -61,28 +64,36 @@ func (r *Repository) StudentCourseDetail(courseID int) (json.RawMessage, error) 
 				WHERE course_id=$1
 			), '[]'::json)
 		)
-	`, courseID).Scan(&payload); err != nil {
+	`, courseID, studentID).Scan(&payload); err != nil {
 		return nil, err
 	}
 	return json.RawMessage(payload), nil
 }
 
-func (r *Repository) StudentSessionDetail(sessionID int) (json.RawMessage, error) {
+func (r *Repository) StudentSessionDetail(sessionID int, studentID int) (json.RawMessage, error) {
 	var payload []byte
 	if err := r.db.QueryRow(`
 		SELECT json_build_object(
 			'materials', COALESCE((
 				SELECT json_agg(json_build_object('id',id,'title',title,'type',material_type,'size',size,'fileUrl','/api/materials/' || id || '/file') ORDER BY id)
 				FROM course_materials
-				WHERE session_id=$1 AND deleted_at IS NULL AND status IN ('submitted','available')
+				WHERE session_id=$1 AND deleted_at IS NULL AND status IN ('submitted','available','approved')
 			), '[]'::json),
 			'assignments', COALESCE((
 				SELECT json_agg(json_build_object('id',id,'title',title,'deadline',due_date,'status',status) ORDER BY id)
 				FROM session_assignments
 				WHERE session_id=$1
-			), '[]'::json)
+			), '[]'::json),
+			'pretest', COALESCE((SELECT json_build_object('id',sar.id,'title',COALESCE(sa.title,'Pretest'),'score',sar.score,'maxScore',sar.max_score,'status',sar.status,'note',sar.note) FROM session_assessment_results sar LEFT JOIN session_assessments sa ON sa.session_id=sar.session_id AND sa.assessment_type=sar.assessment_type WHERE sar.session_id=$1 AND sar.student_id=$2 AND sar.assessment_type='pretest'), json_build_object('title','Pretest','score',NULL,'maxScore',100,'status','not_started')),
+			'posttest', COALESCE((SELECT json_build_object('id',sar.id,'title',COALESCE(sa.title,'Post-test'),'score',sar.score,'maxScore',sar.max_score,'status',sar.status,'note',sar.note) FROM session_assessment_results sar LEFT JOIN session_assessments sa ON sa.session_id=sar.session_id AND sa.assessment_type=sar.assessment_type WHERE sar.session_id=$1 AND sar.student_id=$2 AND sar.assessment_type='posttest'), json_build_object('title','Post-test','score',NULL,'maxScore',100,'status','not_started')),
+			'progress', (
+				(CASE WHEN EXISTS (SELECT 1 FROM session_assessment_results sar WHERE sar.session_id=$1 AND sar.student_id=$2 AND sar.assessment_type='pretest' AND sar.status='completed') THEN 25 ELSE 0 END) +
+				(CASE WHEN EXISTS (SELECT 1 FROM course_materials cm WHERE cm.session_id=$1 AND cm.deleted_at IS NULL AND cm.status IN ('submitted','available','approved')) THEN 25 ELSE 0 END) +
+				(CASE WHEN EXISTS (SELECT 1 FROM session_assessment_results sar WHERE sar.session_id=$1 AND sar.student_id=$2 AND sar.assessment_type='posttest' AND sar.status='completed') THEN 25 ELSE 0 END) +
+				(CASE WHEN EXISTS (SELECT 1 FROM course_sessions cs JOIN courses c ON c.id=cs.course_id JOIN attendance_sessions ats ON ats.course_code=c.class_code AND ats.session_number=cs.session_number JOIN attendance_records ar ON ar.session_id=ats.id JOIN students st ON st.student_id=ar.nim WHERE cs.id=$1 AND st.id=$2 AND ar.status='Hadir') THEN 25 ELSE 0 END)
+			)
 		)
-	`, sessionID).Scan(&payload); err != nil {
+	`, sessionID, studentID).Scan(&payload); err != nil {
 		return nil, err
 	}
 	return json.RawMessage(payload), nil
@@ -131,17 +142,17 @@ var pageDataQueries = map[string]string{
 	"admin_grades":    lecturerGradesQuery(true),
 	"assistant_dashboard": `
 		SELECT json_build_object(
-			'practicalSessions', COALESCE((SELECT json_agg(json_build_object('id',c.id,'course',c.name,'class',c.class_code,'lab',c.room,'schedule',CASE WHEN c.start_time = '' AND c.end_time = '' THEN c.day ELSE c.day || ', ' || c.start_time || ' - ' || c.end_time END,'students',COALESCE(cardinality(cls.students),c.students,0),'attendance',c.attendance_present,'topic',NULL) ORDER BY c.id) FROM courses c LEFT JOIN classes cls ON cls.code = c.class_code WHERE EXISTS (SELECT 1 FROM lab_assistants la WHERE la.name = c.assistant)), '[]'::json),
+			'practicalSessions', COALESCE((SELECT json_agg(json_build_object('id',c.id,'course',c.name,'class',c.class_code,'lab',c.room,'schedule',CASE WHEN c.start_time = '' AND c.end_time = '' THEN c.day ELSE c.day || ', ' || c.start_time || ' - ' || c.end_time END,'students',COALESCE(NULLIF(cardinality(cls.students),0),c.students,0),'attendance',c.attendance_present,'topic',NULL) ORDER BY c.id) FROM courses c LEFT JOIN classes cls ON cls.code = c.class_code WHERE EXISTS (SELECT 1 FROM lab_assistants la WHERE la.name = c.assistant)), '[]'::json),
 			'pendingTasks', COALESCE((SELECT json_agg(json_build_object('id',id,'task',task,'submitted',submitted,'total',total,'deadline',deadline) ORDER BY id) FROM assistant_tasks), '[]'::json),
 			'upcomingPracticals', COALESCE((SELECT json_agg(json_build_object('id',c.id,'course',c.name,'class',c.class_code,'time',CASE WHEN c.start_time = '' AND c.end_time = '' THEN c.day ELSE c.day || ', ' || c.start_time || ' - ' || c.end_time END,'lab',c.room,'topic',NULL) ORDER BY c.id) FROM courses c WHERE EXISTS (SELECT 1 FROM lab_assistants la WHERE la.name = c.assistant)), '[]'::json),
 			'recentActivities', COALESCE((SELECT json_agg(json_build_object('id',id,'message',detail,'time',activity_time,'type',icon) ORDER BY sort_order) FROM admin_activities LIMIT 2), '[]'::json)
 		)`,
 	"assistant_practicals": `
 		SELECT json_build_object(
-			'courses', COALESCE((SELECT json_agg(json_build_object('id',c.id,'courseCode',c.class_code,'name',c.name,'lecturer',c.instructor,'class',c.class_code,'lab',c.room,'schedule',json_build_object('day',c.day,'startTime',c.start_time,'endTime',c.end_time),'semester',NULL,'academicYear',c.academic_year,'students',COALESCE(cardinality(cls.students),c.students,0),'attendance',json_build_object('present',c.attendance_present,'total',c.attendance_total,'percentage',COALESCE(c.attendance_present*100/NULLIF(c.attendance_total,0),0)),'color',c.color) ORDER BY c.id) FROM courses c LEFT JOIN classes cls ON cls.code = c.class_code WHERE EXISTS (SELECT 1 FROM lab_assistants la WHERE la.name = c.assistant)), '[]'::json),
-			'sessions', COALESCE((SELECT json_agg(json_build_object('id',cs.id,'courseId',cs.course_id,'sessionNumber',cs.session_number,'title',cs.topic,'date',cs.session_date,'time',cs.session_time,'description',cs.description,'room',cs.room,'reportStatus',(SELECT ar.status FROM assistant_reports ar WHERE ar.course_code=c.class_code AND ar.week=cs.session_number ORDER BY ar.id DESC LIMIT 1),'reportId',(SELECT ar.id FROM assistant_reports ar WHERE ar.course_code=c.class_code AND ar.week=cs.session_number ORDER BY ar.id DESC LIMIT 1)) ORDER BY cs.course_id, cs.session_number) FROM course_sessions cs JOIN courses c ON c.id=cs.course_id WHERE EXISTS (SELECT 1 FROM lab_assistants la WHERE la.name = c.assistant)), '[]'::json),
-			'materials', COALESCE((SELECT json_agg(json_build_object('id',m.id,'courseId',m.course_id,'sessionId',m.session_id,'name',m.title,'type',m.material_type,'size',m.size,'uploadDate',m.upload_date) ORDER BY m.id) FROM course_materials m WHERE m.session_id IS NOT NULL), '[]'::json),
-			'assignments', COALESCE((SELECT json_agg(json_build_object('id',sa.id,'courseId',sa.course_id,'sessionId',sa.session_id,'title',sa.title,'description',sa.description,'deadline',sa.due_date,'submittedCount',sa.submitted_count,'totalStudents',sa.total_students,'sessionNumber',cs.session_number) ORDER BY sa.id) FROM session_assignments sa LEFT JOIN course_sessions cs ON cs.id=sa.session_id), '[]'::json),
+			'courses', COALESCE((SELECT json_agg(json_build_object('id',c.id,'courseCode',c.class_code,'name',c.name,'lecturer',c.instructor,'class',c.class_code,'lab',c.room,'schedule',json_build_object('day',c.day,'startTime',c.start_time,'endTime',c.end_time),'semester',NULL,'academicYear',c.academic_year,'students',COALESCE(NULLIF(cardinality(cls.students),0),c.students,0),'attendance',json_build_object('present',c.attendance_present,'total',c.attendance_total,'percentage',COALESCE(c.attendance_present*100/NULLIF(c.attendance_total,0),0)),'color',c.color) ORDER BY c.id) FROM courses c LEFT JOIN classes cls ON cls.code = c.class_code WHERE EXISTS (SELECT 1 FROM lab_assistants la WHERE la.name = c.assistant)), '[]'::json),
+			'sessions', COALESCE((SELECT json_agg(json_build_object('id',cs.id,'courseId',cs.course_id,'sessionNumber',cs.session_number,'title',cs.topic,'date',cs.session_date,'time',cs.session_time,'description',cs.description,'room',cs.room,'sortOrder',cs.sort_order,'pretest',COALESCE((SELECT json_build_object('id',sa.id,'title',sa.title,'score',sa.score,'maxScore',sa.max_score,'status',sa.status,'note',sa.note) FROM session_assessments sa WHERE sa.session_id=cs.id AND sa.assessment_type='pretest'), json_build_object('title','Pretest','score',NULL,'maxScore',100,'status','not_started')),'posttest',COALESCE((SELECT json_build_object('id',sa.id,'title',sa.title,'score',sa.score,'maxScore',sa.max_score,'status',sa.status,'note',sa.note) FROM session_assessments sa WHERE sa.session_id=cs.id AND sa.assessment_type='posttest'), json_build_object('title','Post-test','score',NULL,'maxScore',100,'status','not_started')),'progress',(CASE WHEN EXISTS (SELECT 1 FROM session_assessments sa WHERE sa.session_id=cs.id AND sa.assessment_type='pretest' AND sa.status='completed') THEN 25 ELSE 0 END)+(CASE WHEN EXISTS (SELECT 1 FROM course_materials cm WHERE cm.session_id=cs.id AND cm.deleted_at IS NULL AND cm.status IN ('submitted','available','approved')) THEN 25 ELSE 0 END)+(CASE WHEN EXISTS (SELECT 1 FROM session_assessments sa WHERE sa.session_id=cs.id AND sa.assessment_type='posttest' AND sa.status='completed') THEN 25 ELSE 0 END)+(CASE WHEN EXISTS (SELECT 1 FROM attendance_sessions ats JOIN attendance_records ar ON ar.session_id=ats.id WHERE ats.role_scope='assistant' AND ats.course_code=c.class_code AND ats.session_number=cs.session_number) THEN 25 ELSE 0 END),'reportStatus',(SELECT ar.status FROM assistant_reports ar WHERE ar.course_code=c.class_code AND ar.week=cs.session_number ORDER BY ar.id DESC LIMIT 1),'reportId',(SELECT ar.id FROM assistant_reports ar WHERE ar.course_code=c.class_code AND ar.week=cs.session_number ORDER BY ar.id DESC LIMIT 1),'rejectionNote',(SELECT ar.rejection_note FROM assistant_reports ar WHERE ar.course_code=c.class_code AND ar.week=cs.session_number ORDER BY ar.id DESC LIMIT 1),'assistantAttendance',json_build_object('status',COALESCE((SELECT asa.status FROM assistant_session_attendance asa WHERE asa.session_id=cs.id),''),'checkInTime',COALESCE((SELECT asa.check_in_time FROM assistant_session_attendance asa WHERE asa.session_id=cs.id),''))) ORDER BY cs.course_id, cs.sort_order, cs.session_number) FROM course_sessions cs JOIN courses c ON c.id=cs.course_id WHERE EXISTS (SELECT 1 FROM lab_assistants la WHERE la.name = c.assistant)), '[]'::json),
+			'materials', COALESCE((SELECT json_agg(json_build_object('id',m.id,'courseId',m.course_id,'sessionId',m.session_id,'name',m.title,'type',m.material_type,'size',m.size,'uploadDate',m.upload_date,'fileUrl',m.file_url) ORDER BY m.id) FROM course_materials m WHERE m.session_id IS NOT NULL), '[]'::json),
+			'assignments', COALESCE((SELECT json_agg(json_build_object('id',sa.id,'courseId',sa.course_id,'sessionId',sa.session_id,'title',sa.title,'description',sa.description,'deadline',sa.due_date,'submittedCount',sa.submitted_count,'totalStudents',sa.total_students,'sessionNumber',cs.session_number,'fileUrl',sa.file_url) ORDER BY sa.id) FROM session_assignments sa LEFT JOIN course_sessions cs ON cs.id=sa.session_id), '[]'::json),
 			'submissions', COALESCE((SELECT json_agg(json_build_object('id',id,'nim',nim,'name',name,'submittedAt',submitted_at,'fileName',file_name,'fileSize',file_size,'score',score,'feedback',CASE WHEN score IS NULL THEN '' ELSE 'Bagus!' END) ORDER BY id) FROM assistant_reports), '[]'::json),
 			'attendanceRecordsBySession', COALESCE((
 				SELECT json_object_agg(course_session_id, records)
@@ -154,9 +165,33 @@ var pageDataQueries = map[string]string{
 					GROUP BY cs.id
 				) s
 			), '{}'::json),
+			'assessmentResultsBySession', COALESCE((
+				SELECT json_object_agg(session_id, records)
+				FROM (
+					SELECT cs.id session_id,
+						json_agg(json_build_object(
+							'studentId', st.id,
+							'nim', st.student_id,
+							'name', st.name,
+							'pretest', COALESCE((SELECT json_build_object('id',sar.id,'score',sar.score,'maxScore',sar.max_score,'status',sar.status,'note',sar.note) FROM session_assessment_results sar WHERE sar.session_id=cs.id AND sar.student_id=st.id AND sar.assessment_type='pretest'), json_build_object('score',NULL,'maxScore',100,'status','not_started','note','')),
+							'posttest', COALESCE((SELECT json_build_object('id',sar.id,'score',sar.score,'maxScore',sar.max_score,'status',sar.status,'note',sar.note) FROM session_assessment_results sar WHERE sar.session_id=cs.id AND sar.student_id=st.id AND sar.assessment_type='posttest'), json_build_object('score',NULL,'maxScore',100,'status','not_started','note','')),
+							'progress',
+								(CASE WHEN EXISTS (SELECT 1 FROM session_assessment_results sar WHERE sar.session_id=cs.id AND sar.student_id=st.id AND sar.assessment_type='pretest' AND sar.status='completed') THEN 25 ELSE 0 END) +
+								(CASE WHEN EXISTS (SELECT 1 FROM course_materials cm WHERE cm.session_id=cs.id AND cm.deleted_at IS NULL AND cm.status IN ('submitted','available','approved')) THEN 25 ELSE 0 END) +
+								(CASE WHEN EXISTS (SELECT 1 FROM session_assessment_results sar WHERE sar.session_id=cs.id AND sar.student_id=st.id AND sar.assessment_type='posttest' AND sar.status='completed') THEN 25 ELSE 0 END) +
+								(CASE WHEN EXISTS (SELECT 1 FROM attendance_sessions ats JOIN attendance_records ar ON ar.session_id=ats.id WHERE ats.role_scope='assistant' AND ats.course_code=c.class_code AND ats.session_number=cs.session_number AND ar.nim=st.student_id AND ar.status='Hadir') THEN 25 ELSE 0 END)
+						) ORDER BY st.student_id) records
+					FROM course_sessions cs
+					JOIN courses c ON c.id=cs.course_id
+					JOIN classes cls ON cls.code=c.class_code
+					JOIN students st ON st.id=ANY(cls.students)
+					WHERE EXISTS (SELECT 1 FROM lab_assistants la WHERE la.name = c.assistant)
+					GROUP BY cs.id
+				) s
+			), '{}'::json),
 			'attendanceRecords', COALESCE((SELECT json_agg(json_build_object('id',id,'nim',nim,'name',name,'status',status,'time',COALESCE(NULLIF(attendance_time,''),'-')) ORDER BY id) FROM attendance_records WHERE session_id=(SELECT id FROM attendance_sessions WHERE role_scope='assistant' ORDER BY id LIMIT 1)), '[]'::json)
 		)`,
-	"assistant_reports":      `SELECT json_build_object('reports', COALESCE((SELECT json_agg(json_build_object('id',ar.id,'nim',ar.nim,'name',ar.name,'courseCode',ar.course_code,'courseName',ar.course_name,'class',ar.class_name,'week',ar.week,'topic',ar.topic,'submittedAt',ar.submitted_at,'status',ar.status,'score',ar.score,'fileName',ar.file_name,'fileSize',ar.file_size,'lecturer',c.instructor,'assistant',c.assistant) ORDER BY ar.id) FROM assistant_reports ar LEFT JOIN courses c ON c.class_code=ar.course_code), '[]'::json), 'reportSummary', COALESCE((SELECT json_agg(json_build_object('courseCode',course_code,'courseName',course_name,'class',class_name,'totalReports',total_reports,'reviewed',reviewed,'pending',pending,'approved',approved,'needsRevision',needs_revision) ORDER BY course_code) FROM (SELECT course_code,course_name,class_name,count(*) total_reports,count(*) FILTER (WHERE status IN ('Disetujui','Ditolak')) reviewed,count(*) FILTER (WHERE status='Menunggu Review') pending,count(*) FILTER (WHERE status='Disetujui') approved,count(*) FILTER (WHERE status='Ditolak') needs_revision FROM assistant_reports GROUP BY course_code,course_name,class_name) s), '[]'::json))`,
+	"assistant_reports":      `SELECT json_build_object('reports', COALESCE((SELECT json_agg(json_build_object('id',ar.id,'nim',ar.nim,'name',ar.name,'courseCode',ar.course_code,'courseName',ar.course_name,'class',ar.class_name,'week',ar.week,'topic',ar.topic,'submittedAt',ar.submitted_at,'status',ar.status,'score',COALESCE(ar.score,(SELECT MAX(ss.score) FROM student_submissions ss JOIN session_assignments sa ON sa.id=ss.assignment_id WHERE sa.course_id=(SELECT id FROM courses WHERE class_code=ar.course_code LIMIT 1) AND ss.student_id=(SELECT id FROM students WHERE student_id=ar.nim LIMIT 1))),'fileName',ar.file_name,'fileSize',ar.file_size,'rejectionNote',ar.rejection_note,'lecturer',c.instructor,'assistant',c.assistant) ORDER BY ar.id) FROM assistant_reports ar LEFT JOIN courses c ON c.class_code=ar.course_code), '[]'::json), 'reportSummary', COALESCE((SELECT json_agg(json_build_object('courseCode',course_code,'courseName',course_name,'class',class_name,'totalReports',total_reports,'reviewed',reviewed,'pending',pending,'approved',approved,'needsRevision',needs_revision) ORDER BY course_code) FROM (SELECT course_code,course_name,class_name,count(*) total_reports,count(*) FILTER (WHERE status IN ('Disetujui','Ditolak')) reviewed,count(*) FILTER (WHERE status='Menunggu Review') pending,count(*) FILTER (WHERE status='Disetujui') approved,count(*) FILTER (WHERE status='Ditolak') needs_revision FROM assistant_reports GROUP BY course_code,course_name,class_name) s), '[]'::json))`,
 	"student_course_detail":  `SELECT json_build_object('materials', COALESCE((SELECT json_agg(json_build_object('id',id,'title',title,'week',week,'status',status) ORDER BY id) FROM course_materials WHERE course_id=1 AND week IS NOT NULL), '[]'::json), 'courseSessions', COALESCE((SELECT json_agg(json_build_object('id',id,'sessionName',title,'topic',topic,'date',session_date,'time',session_time,'type',session_type,'conferenceLink',conference_link) ORDER BY id) FROM course_sessions WHERE course_id=1), '[]'::json), 'assignments', COALESCE((SELECT json_agg(json_build_object('id',id,'title',title,'dueDate',due_date,'status',status,'score',score) ORDER BY id) FROM session_assignments WHERE course_id=1 AND session_id IS NULL), '[]'::json))`,
 	"student_session_detail": `SELECT json_build_object('materials', COALESCE((SELECT json_agg(json_build_object('id',id,'title',title,'type',material_type,'size',size) ORDER BY id) FROM course_materials WHERE session_id=1), '[]'::json), 'assignments', COALESCE((SELECT json_agg(json_build_object('id',id,'title',title,'deadline',due_date,'status',status) ORDER BY id) FROM session_assignments WHERE session_id=1), '[]'::json))`,
 	"student_materials":      `SELECT json_build_object('courses', (SELECT json_agg(x ORDER BY ord) FROM (SELECT 0 ord, json_build_object('id','all','name','Semua Kursus') x UNION ALL SELECT id, json_build_object('id',id,'name',name,'color',color) FROM courses) q), 'materials', COALESCE((SELECT json_agg(json_build_object('id',m.id,'title',m.title,'type',lower(m.material_type),'courseId',m.course_id,'courseName',c.name,'size',m.size,'duration',NULLIF(m.duration,''),'downloads',m.downloads,'uploadDate',m.upload_date,'courseColor',c.color) ORDER BY m.id) FROM course_materials m JOIN courses c ON c.id=m.course_id WHERE m.session_id IS NULL), '[]'::json))`,
