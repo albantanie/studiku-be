@@ -281,7 +281,10 @@ type StudentSessionAssessmentInput struct {
 	Note      string `json:"note"`
 }
 
-type PretestQuestionInput struct {
+// Soal pretest dan post-test memakai bentuk yang sama. Field Type menentukan
+// jenis tes, dan boleh kosong pada rute lama yang selalu berarti pretest.
+type QuizQuestionInput struct {
+	Type          string   `json:"type"`
 	Question      string   `json:"question" binding:"required"`
 	Options       []string `json:"options" binding:"required"`
 	CorrectOption int      `json:"correctOption" binding:"min=0"`
@@ -290,18 +293,22 @@ type PretestQuestionInput struct {
 	SortOrder     int      `json:"sortOrder"`
 }
 
-type PretestAnswerInput struct {
+// AnswerIndex sengaja tidak memakai binding required karena indeks 0 adalah
+// pilihan A yang sah, sedangkan required menolak nilai nol.
+type QuizAnswerInput struct {
 	QuestionID  int `json:"questionId" binding:"required"`
-	AnswerIndex int `json:"answerIndex" binding:"required"`
+	AnswerIndex int `json:"answerIndex"`
 }
 
-type PretestSubmissionInput struct {
-	Answers []PretestAnswerInput `json:"answers" binding:"required"`
+type QuizSubmissionInput struct {
+	Type    string            `json:"type"`
+	Answers []QuizAnswerInput `json:"answers" binding:"required"`
 }
 
-type PretestQuestion struct {
+type QuizQuestion struct {
 	ID            int      `json:"id"`
 	SessionID     int      `json:"sessionId"`
+	Type          string   `json:"type"`
 	Question      string   `json:"question"`
 	Options       []string `json:"options"`
 	CorrectOption *int     `json:"correctOption,omitempty"`
@@ -310,16 +317,24 @@ type PretestQuestion struct {
 	SortOrder     int      `json:"sortOrder"`
 }
 
-type PretestSubmission struct {
-	ID          int                  `json:"id"`
-	SessionID   int                  `json:"sessionId"`
-	StudentID   int                  `json:"studentId"`
-	Answers     []PretestAnswerInput `json:"answers"`
-	Score       int                  `json:"score"`
-	MaxScore    int                  `json:"maxScore"`
-	Status      string               `json:"status"`
-	SubmittedAt string               `json:"submittedAt,omitempty"`
+type QuizSubmission struct {
+	ID          int               `json:"id"`
+	SessionID   int               `json:"sessionId"`
+	StudentID   int               `json:"studentId"`
+	Type        string            `json:"type"`
+	Answers     []QuizAnswerInput `json:"answers"`
+	Score       int               `json:"score"`
+	MaxScore    int               `json:"maxScore"`
+	Status      string            `json:"status"`
+	SubmittedAt string            `json:"submittedAt,omitempty"`
 }
+
+// Nama lama dipertahankan sebagai alias supaya pemanggil lama tetap kompilasi.
+type PretestQuestionInput = QuizQuestionInput
+type PretestAnswerInput = QuizAnswerInput
+type PretestSubmissionInput = QuizSubmissionInput
+type PretestQuestion = QuizQuestion
+type PretestSubmission = QuizSubmission
 
 type SessionAssignment struct {
 	ID             int    `json:"id"`

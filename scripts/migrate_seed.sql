@@ -251,6 +251,7 @@ CREATE TABLE IF NOT EXISTS course_sessions (
   conference_link TEXT,
   room VARCHAR(100) NOT NULL DEFAULT '',
   description TEXT NOT NULL DEFAULT '',
+  sort_order INT NOT NULL DEFAULT 0,
   UNIQUE(course_id, session_number)
 );
 
@@ -293,6 +294,22 @@ CREATE TABLE IF NOT EXISTS session_assignments (
   total_students INT NOT NULL DEFAULT 0
 );
 
+-- Jawaban tugas mahasiswa. Dibuat di sini karena trigger sinkronisasi nilai di
+-- bawah menempel pada tabel ini, jadi harus ada sebelum trigger dibuat.
+CREATE TABLE IF NOT EXISTS student_submissions (
+  id SERIAL PRIMARY KEY,
+  assignment_id INT NOT NULL REFERENCES session_assignments(id) ON DELETE CASCADE,
+  student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  answer_text TEXT NOT NULL DEFAULT '',
+  file_url TEXT NOT NULL DEFAULT '',
+  file_name VARCHAR(255) NOT NULL DEFAULT '',
+  file_size VARCHAR(50) NOT NULL DEFAULT '',
+  submitted_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  score INT,
+  feedback TEXT NOT NULL DEFAULT '',
+  UNIQUE(assignment_id, student_id)
+);
+
 CREATE TABLE IF NOT EXISTS session_assessments (
   id SERIAL PRIMARY KEY,
   session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
@@ -320,6 +337,39 @@ CREATE TABLE IF NOT EXISTS session_assessment_results (
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE(session_id, student_id, assessment_type)
 );
+
+-- Bank soal pretest dan post-test, dibedakan oleh assessment_type.
+-- Dibuat di sini supaya migrate_seed berdiri sendiri, tidak bergantung pada
+-- pembuatan skema oleh kode Go yang hanya jalan saat perintah rest.
+CREATE TABLE IF NOT EXISTS session_pretest_questions (
+  id SERIAL PRIMARY KEY,
+  session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+  assessment_type VARCHAR(20) NOT NULL DEFAULT 'pretest' CHECK (assessment_type IN ('pretest','posttest')),
+  question TEXT NOT NULL,
+  options JSONB NOT NULL DEFAULT '[]'::jsonb,
+  correct_option INT NOT NULL DEFAULT 0,
+  points INT NOT NULL DEFAULT 10,
+  explanation TEXT NOT NULL DEFAULT '',
+  sort_order INT NOT NULL DEFAULT 0,
+  created_by INT REFERENCES lab_assistants(id) ON DELETE SET NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS session_pretest_submissions (
+  id SERIAL PRIMARY KEY,
+  session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+  student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  assessment_type VARCHAR(20) NOT NULL DEFAULT 'pretest' CHECK (assessment_type IN ('pretest','posttest')),
+  answers JSONB NOT NULL DEFAULT '[]'::jsonb,
+  score INT NOT NULL DEFAULT 0,
+  max_score INT NOT NULL DEFAULT 100,
+  status VARCHAR(50) NOT NULL DEFAULT 'not_started',
+  submitted_at TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+-- Keunikan (session,student,type) dipasang lewat CREATE UNIQUE INDEX di bawah,
+-- sama seperti skema Go, supaya DB lama dan baru sama-sama punya satu index saja.
 
 CREATE TABLE IF NOT EXISTS attendance_sessions (
   id SERIAL PRIMARY KEY,
@@ -662,17 +712,37 @@ ON CONFLICT (session_id,student_id,assessment_type) DO UPDATE SET
   submitted_at=EXCLUDED.submitted_at,
   updated_at=now();
 
-INSERT INTO session_pretest_questions (id,session_id,question,options,correct_option,points,explanation,sort_order,created_by) VALUES
-(1,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'Apa tujuan pretest dalam praktikum?','["Mengukur pemahaman awal","Menilai akhir pembelajaran","Mengganti presensi","Membuat laporan akhir"]'::jsonb,0,10,'Pretest dipakai untuk mengukur pemahaman awal mahasiswa.',1,1),
-(2,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'Apa keluaran utama dari pretest?','["Nilai awal","Nilai tugas","Nilai presensi","Nilai laporan"]'::jsonb,0,10,'Pretest menghasilkan nilai awal sebelum pembelajaran dimulai.',2,1),
-(3,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'Kapan pretest dikerjakan?','["Sebelum materi","Setelah post-test","Saat upload tugas","Setelah laporan"]'::jsonb,0,10,'Pretest dikerjakan sebelum mahasiswa mempelajari materi sesi.',3,1)
-ON CONFLICT (id) DO UPDATE SET question=EXCLUDED.question,options=EXCLUDED.options,correct_option=EXCLUDED.correct_option,points=EXCLUDED.points,explanation=EXCLUDED.explanation,sort_order=EXCLUDED.sort_order,created_by=EXCLUDED.created_by,updated_at=now();
+-- Bank soal dipakai bersama oleh pretest dan post-test lewat kolom assessment_type.
+ALTER TABLE session_pretest_questions ADD COLUMN IF NOT EXISTS assessment_type VARCHAR(20) NOT NULL DEFAULT 'pretest';
+ALTER TABLE session_pretest_submissions ADD COLUMN IF NOT EXISTS assessment_type VARCHAR(20) NOT NULL DEFAULT 'pretest';
+ALTER TABLE session_pretest_submissions DROP CONSTRAINT IF EXISTS session_pretest_submissions_session_id_student_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS session_pretest_submissions_unique_idx ON session_pretest_submissions (session_id, student_id, assessment_type);
+CREATE INDEX IF NOT EXISTS session_pretest_questions_lookup_idx ON session_pretest_questions (session_id, assessment_type, sort_order);
+
+INSERT INTO session_pretest_questions (id,session_id,assessment_type,question,options,correct_option,points,explanation,sort_order,created_by) VALUES
+(1,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'pretest','Apa tujuan pretest dalam praktikum?','["Mengukur pemahaman awal","Menilai akhir pembelajaran","Mengganti presensi","Membuat laporan akhir"]'::jsonb,0,10,'Pretest dipakai untuk mengukur pemahaman awal mahasiswa.',1,1),
+(2,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'pretest','Apa keluaran utama dari pretest?','["Nilai awal","Nilai tugas","Nilai presensi","Nilai laporan"]'::jsonb,0,10,'Pretest menghasilkan nilai awal sebelum pembelajaran dimulai.',2,1),
+(3,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'pretest','Kapan pretest dikerjakan?','["Sebelum materi","Setelah post-test","Saat upload tugas","Setelah laporan"]'::jsonb,0,10,'Pretest dikerjakan sebelum mahasiswa mempelajari materi sesi.',3,1),
+(4,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'posttest','Setelah praktikum, apa fungsi post-test?','["Mengukur pemahaman akhir","Mengukur pemahaman awal","Mengganti presensi","Menentukan jadwal"]'::jsonb,0,10,'Post-test mengukur pemahaman akhir setelah materi dipelajari.',1,1),
+(5,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'posttest','Nilai pretest dan post-test dipakai untuk menghitung apa?','["N-Gain","Presensi","Jumlah SKS","Kuota kelas"]'::jsonb,0,10,'Selisih ternormalisasi pretest dan post-test menghasilkan N-Gain.',2,1),
+(6,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'posttest','Nilai N-Gain 0,75 termasuk kategori apa?','["Tinggi","Sedang","Rendah","Tidak valid"]'::jsonb,0,10,'Menurut Hake, N-Gain >= 0,70 termasuk kategori tinggi.',3,1)
+ON CONFLICT (id) DO UPDATE SET assessment_type=EXCLUDED.assessment_type,question=EXCLUDED.question,options=EXCLUDED.options,correct_option=EXCLUDED.correct_option,points=EXCLUDED.points,explanation=EXCLUDED.explanation,sort_order=EXCLUDED.sort_order,created_by=EXCLUDED.created_by,updated_at=now();
 SELECT setval('session_pretest_questions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM session_pretest_questions));
 
-INSERT INTO session_pretest_submissions (id,session_id,student_id,answers,score,max_score,status,submitted_at) VALUES
-(1,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),1,'[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":0}]'::jsonb,100,100,'completed',CURRENT_TIMESTAMP),
-(2,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),2,'[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":1},{"questionId":3,"answerIndex":0}]'::jsonb,66,100,'completed',CURRENT_TIMESTAMP)
-ON CONFLICT (id) DO UPDATE SET session_id=EXCLUDED.session_id,student_id=EXCLUDED.student_id,answers=EXCLUDED.answers,score=EXCLUDED.score,max_score=EXCLUDED.max_score,status=EXCLUDED.status,submitted_at=EXCLUDED.submitted_at,updated_at=now();
+-- Semua mahasiswa CS301 mengerjakan pretest dan post-test sesi 1. Skor selaras
+-- dengan session_assessment_results agar tampilan quiz dan N-Gain konsisten.
+INSERT INTO session_pretest_submissions (id,session_id,student_id,assessment_type,answers,score,max_score,status,submitted_at) VALUES
+(1,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),1,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":1}]'::jsonb,63,100,'completed',CURRENT_TIMESTAMP),
+(2,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),2,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":1}]'::jsonb,64,100,'completed',CURRENT_TIMESTAMP),
+(3,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),3,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":1}]'::jsonb,65,100,'completed',CURRENT_TIMESTAMP),
+(4,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),4,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":1}]'::jsonb,66,100,'completed',CURRENT_TIMESTAMP),
+(5,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),5,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":1}]'::jsonb,67,100,'completed',CURRENT_TIMESTAMP),
+(6,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),1,'posttest','[{"questionId":4,"answerIndex":0},{"questionId":5,"answerIndex":0},{"questionId":6,"answerIndex":0}]'::jsonb,77,100,'completed',CURRENT_TIMESTAMP),
+(7,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),2,'posttest','[{"questionId":4,"answerIndex":0},{"questionId":5,"answerIndex":0},{"questionId":6,"answerIndex":0}]'::jsonb,78,100,'completed',CURRENT_TIMESTAMP),
+(8,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),3,'posttest','[{"questionId":4,"answerIndex":0},{"questionId":5,"answerIndex":0},{"questionId":6,"answerIndex":0}]'::jsonb,79,100,'completed',CURRENT_TIMESTAMP),
+(9,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),4,'posttest','[{"questionId":4,"answerIndex":0},{"questionId":5,"answerIndex":0},{"questionId":6,"answerIndex":0}]'::jsonb,80,100,'completed',CURRENT_TIMESTAMP),
+(10,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),5,'posttest','[{"questionId":4,"answerIndex":0},{"questionId":5,"answerIndex":0},{"questionId":6,"answerIndex":0}]'::jsonb,81,100,'completed',CURRENT_TIMESTAMP)
+ON CONFLICT (id) DO UPDATE SET session_id=EXCLUDED.session_id,student_id=EXCLUDED.student_id,assessment_type=EXCLUDED.assessment_type,answers=EXCLUDED.answers,score=EXCLUDED.score,max_score=EXCLUDED.max_score,status=EXCLUDED.status,submitted_at=EXCLUDED.submitted_at,updated_at=now();
 SELECT setval('session_pretest_submissions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM session_pretest_submissions));
 
 INSERT INTO attendance_sessions (id,role_scope,course_code,course_name,class_name,session_number,session_date,session_time,room,lab,topic,total_students,present,absent,sick,permit,excused,status,assistant_status,assistant_check_in_time) VALUES
@@ -909,5 +979,99 @@ FOR EACH ROW
 WHEN (NEW.score IS DISTINCT FROM OLD.score OR NEW.feedback IS DISTINCT FROM OLD.feedback)
 EXECUTE FUNCTION sync_submission_grade_to_report();
 -- <<< 009_sync_grades.up.sql
+
+-- >>> 010_demo_ready_data.up.sql
+-- Melengkapi data agar seluruh layar demo terisi: pengumpulan tugas, presensi
+-- asisten, dan status alur laporan. Semua idempotent lewat ON CONFLICT.
+
+-- Pengumpulan tugas mahasiswa untuk tugas yang berstatus submitted.
+-- Sebagian sudah dinilai, sebagian belum, supaya aslab punya bahan penilaian.
+INSERT INTO student_submissions (assignment_id,student_id,answer_text,file_url,file_name,file_size,submitted_at,score,feedback) VALUES
+(1,1,'Implementasi bubble sort dengan optimasi flag swap.','','bubble_sort_ahmad.pdf','1.2 MB','2026-01-18 09:20',88,'Bagus, sudah ada optimasi.'),
+(1,2,'Implementasi bubble sort lengkap dengan analisis kompleksitas O(n^2).','','bubble_sort_siti.pdf','1.4 MB','2026-01-18 10:05',95,'Sangat lengkap.'),
+(1,3,'Implementasi bubble sort dasar.','','bubble_sort_budi.pdf','0.9 MB','2026-01-19 08:40',NULL,''),
+(2,1,'Analisis quick sort partisi Lomuto.','','quick_sort_ahmad.pdf','1.1 MB','2026-01-25 14:10',85,'Rapi.'),
+(2,2,'Analisis quick sort partisi Hoare dan Lomuto beserta perbandingan.','','quick_sort_siti.pdf','1.5 MB','2026-01-25 15:00',88,'Perbandingannya bagus.'),
+(5,2,'Jawaban quiz pengenalan algoritma.','','quiz_siti.pdf','0.6 MB','2026-01-17 11:00',80,'Tuntas.'),
+(5,1,'Jawaban quiz pengenalan algoritma.','','quiz_ahmad.pdf','0.5 MB','2026-01-17 11:30',NULL,'')
+ON CONFLICT (assignment_id,student_id) DO UPDATE SET answer_text=EXCLUDED.answer_text,file_name=EXCLUDED.file_name,file_size=EXCLUDED.file_size,submitted_at=EXCLUDED.submitted_at,score=EXCLUDED.score,feedback=EXCLUDED.feedback;
+SELECT setval('student_submissions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM student_submissions));
+
+-- Presensi asisten lab per sesi praktikum (kursus 1).
+INSERT INTO assistant_session_attendance (session_id,status,check_in_time) VALUES
+((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'Hadir','07:55'),
+((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=2),'Hadir','07:58'),
+((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=3),'Hadir','08:02')
+ON CONFLICT (session_id) DO UPDATE SET status=EXCLUDED.status, check_in_time=EXCLUDED.check_in_time, updated_at=now();
+
+-- Status alur laporan per kursus (DRAFT/SUBMITTED/APPROVED/REJECTED).
+INSERT INTO report_workflows (course_id,status,updated_at) VALUES
+(1,'SUBMITTED',now()),
+(2,'APPROVED',now()),
+(4,'REJECTED',now())
+ON CONFLICT (course_id) DO UPDATE SET status=EXCLUDED.status, updated_at=now();
+-- <<< 010_demo_ready_data.up.sql
+
+-- >>> 011_demo_account_linkage.up.sql
+-- Menyambungkan akun demo (mahasiswa/dosen/aslab@app.com) ke kelas CS301 yang
+-- datanya paling lengkap, supaya login demo langsung melihat data terisi.
+
+-- CS301 diampu dosen dan aslab demo agar dashboard keduanya berisi.
+UPDATE courses
+SET instructor = COALESCE((SELECT name FROM lecturers WHERE email='dosen@app.com'), instructor),
+    assistant  = COALESCE((SELECT name FROM lab_assistants WHERE email='asslab@app.com'), assistant)
+WHERE class_code = 'CS301';
+
+-- Mahasiswa demo dimasukkan sebagai anggota kelas CS301.
+UPDATE classes
+SET students = ARRAY(SELECT DISTINCT unnest(students || ARRAY[(SELECT id FROM students WHERE email='mahasiswa@app.com')]))
+WHERE code = 'CS301' AND (SELECT id FROM students WHERE email='mahasiswa@app.com') IS NOT NULL;
+
+-- Nilai pretest dan post-test mahasiswa demo pada sesi 1 CS301.
+INSERT INTO session_assessment_results (session_id,student_id,assessment_type,score,max_score,status,submitted_at,updated_at)
+SELECT s.id, m.id, t.atype, t.score, 100, 'completed', now(), now()
+FROM (SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1) s
+CROSS JOIN (SELECT id FROM students WHERE email='mahasiswa@app.com') m
+CROSS JOIN (VALUES ('pretest',68),('posttest',85)) AS t(atype,score)
+ON CONFLICT (session_id,student_id,assessment_type) DO UPDATE SET score=EXCLUDED.score, status='completed', updated_at=now();
+
+INSERT INTO session_pretest_submissions (session_id,student_id,assessment_type,answers,score,max_score,status,submitted_at)
+SELECT s.id, m.id, t.atype, '[]'::jsonb, t.score, 100, 'completed', now()
+FROM (SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1) s
+CROSS JOIN (SELECT id FROM students WHERE email='mahasiswa@app.com') m
+CROSS JOIN (VALUES ('pretest',68),('posttest',85)) AS t(atype,score)
+ON CONFLICT (session_id,student_id,assessment_type) DO UPDATE SET score=EXCLUDED.score, status='completed', updated_at=now();
+
+-- Pengumpulan tugas mahasiswa demo: satu sudah dinilai, satu belum.
+INSERT INTO student_submissions (assignment_id,student_id,answer_text,file_name,file_size,submitted_at,score,feedback)
+SELECT a.aid, m.id, 'Jawaban tugas demo mahasiswa.', 'tugas_demo.pdf','1.0 MB','2026-01-18 09:00', a.sc, a.fb
+FROM (SELECT id FROM students WHERE email='mahasiswa@app.com') m
+CROSS JOIN (VALUES (1,90::int,'Bagus, lengkap.'),(2,NULL::int,'')) AS a(aid,sc,fb)
+WHERE EXISTS (SELECT 1 FROM session_assignments sa WHERE sa.id=a.aid)
+ON CONFLICT (assignment_id,student_id) DO NOTHING;
+
+-- Presensi mahasiswa demo pada sesi asisten CS301 agar presensi & progress terisi.
+INSERT INTO attendance_records (session_id,nim,name,status,attendance_time,check_in_time)
+SELECT (SELECT id FROM attendance_sessions WHERE role_scope='assistant' AND course_code='CS301' ORDER BY id LIMIT 1),
+       m.student_id, m.name, 'Hadir', '08:00', '08:00'
+FROM (SELECT student_id, name FROM students WHERE email='mahasiswa@app.com') m
+WHERE (SELECT id FROM attendance_sessions WHERE role_scope='assistant' AND course_code='CS301' ORDER BY id LIMIT 1) IS NOT NULL
+ON CONFLICT DO NOTHING;
+-- <<< 011_demo_account_linkage.up.sql
+
+-- >>> 012_blank_user_accounts.up.sql
+-- Akun kosong (tanpa data) untuk diisi sendiri oleh pengguna saat demo.
+-- Semua kata sandinya "password". Admin tidak dibuat di sini (sudah ada akun admin).
+
+INSERT INTO students (name,email,password,default_password,student_id,program,semester,courses,status,join_date,is_password_changed)
+VALUES ('Akun Mahasiswa (Kosong)','akun-mahasiswa@app.com','password','password','USER-MHS-01','Teknik Informatika',1,ARRAY[]::text[],'Aktif',CURRENT_DATE,FALSE)
+ON CONFLICT (email) DO NOTHING;
+
+INSERT INTO lab_assistants (name,email,phone,student_id,role,lab,supervisor,semester,gpa,assigned_courses,weekly_hours,status,join_date,password,default_password,is_password_changed) VALUES
+('Akun Aslab (Kosong)','akun-aslab@app.com','','USER-ASLAB-01','aslab','','',1,0,0,0,'Aktif',CURRENT_DATE,'password','password',FALSE),
+('Akun Laboran (Kosong)','akun-laboran@app.com','','USER-LABORAN-01','laboran','','',1,0,0,0,'Aktif',CURRENT_DATE,'password','password',FALSE),
+('Akun Kalab (Kosong)','akun-kalab@app.com','','USER-KALAB-01','kalab','','',1,0,0,0,'Aktif',CURRENT_DATE,'password','password',FALSE)
+ON CONFLICT (email) DO NOTHING;
+-- <<< 012_blank_user_accounts.up.sql
 
 COMMIT;

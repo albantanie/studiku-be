@@ -103,6 +103,7 @@ func (r *Repository) autoMigrate() {
 		`CREATE TABLE IF NOT EXISTS session_pretest_questions (
 			id SERIAL PRIMARY KEY,
 			session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
+			assessment_type VARCHAR(20) NOT NULL DEFAULT 'pretest',
 			question TEXT NOT NULL,
 			options JSONB NOT NULL DEFAULT '[]'::jsonb,
 			correct_option INT NOT NULL DEFAULT 0,
@@ -117,14 +118,25 @@ func (r *Repository) autoMigrate() {
 			id SERIAL PRIMARY KEY,
 			session_id INT NOT NULL REFERENCES course_sessions(id) ON DELETE CASCADE,
 			student_id INT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+			assessment_type VARCHAR(20) NOT NULL DEFAULT 'pretest',
 			answers JSONB NOT NULL DEFAULT '[]'::jsonb,
 			score INT NOT NULL DEFAULT 0,
 			max_score INT NOT NULL DEFAULT 100,
 			status VARCHAR(50) NOT NULL DEFAULT 'not_started',
 			submitted_at TIMESTAMP,
-			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-			UNIQUE(session_id, student_id)
+			updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		// Kolom assessment_type membuat satu bank soal dipakai pretest dan post-test.
+		// ALTER dijalankan terpisah supaya database lama ikut ternormalisasi.
+		`ALTER TABLE session_pretest_questions ADD COLUMN IF NOT EXISTS assessment_type VARCHAR(20) NOT NULL DEFAULT 'pretest'`,
+		`ALTER TABLE session_pretest_submissions ADD COLUMN IF NOT EXISTS assessment_type VARCHAR(20) NOT NULL DEFAULT 'pretest'`,
+		`ALTER TABLE session_pretest_questions DROP CONSTRAINT IF EXISTS session_pretest_questions_assessment_type_check`,
+		`ALTER TABLE session_pretest_questions ADD CONSTRAINT session_pretest_questions_assessment_type_check CHECK (assessment_type IN ('pretest','posttest'))`,
+		`ALTER TABLE session_pretest_submissions DROP CONSTRAINT IF EXISTS session_pretest_submissions_assessment_type_check`,
+		`ALTER TABLE session_pretest_submissions ADD CONSTRAINT session_pretest_submissions_assessment_type_check CHECK (assessment_type IN ('pretest','posttest'))`,
+		`ALTER TABLE session_pretest_submissions DROP CONSTRAINT IF EXISTS session_pretest_submissions_session_id_student_id_key`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS session_pretest_submissions_unique_idx ON session_pretest_submissions (session_id, student_id, assessment_type)`,
+		`CREATE INDEX IF NOT EXISTS session_pretest_questions_lookup_idx ON session_pretest_questions (session_id, assessment_type, sort_order)`,
 		`CREATE TABLE IF NOT EXISTS institution_settings (
 			id SERIAL PRIMARY KEY,
 			university_name VARCHAR(255) NOT NULL,
@@ -187,20 +199,23 @@ func (r *Repository) autoMigrate() {
 			user_agent TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
-		`INSERT INTO session_pretest_questions (session_id,question,options,correct_option,points,explanation,sort_order,created_by)
+		`INSERT INTO session_pretest_questions (session_id,assessment_type,question,options,correct_option,points,explanation,sort_order,created_by)
 		 SELECT * FROM (
 			VALUES
-				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'Apa tujuan pretest dalam praktikum?','["Mengukur pemahaman awal","Menilai akhir pembelajaran","Mengganti presensi","Membuat laporan akhir"]'::jsonb,0,10,'Pretest dipakai untuk mengukur pemahaman awal mahasiswa.',1,1),
-				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'Apa keluaran utama dari pretest?','["Nilai awal","Nilai tugas","Nilai presensi","Nilai laporan"]'::jsonb,0,10,'Pretest menghasilkan nilai awal sebelum pembelajaran dimulai.',2,1),
-				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'Kapan pretest dikerjakan?','["Sebelum materi","Setelah post-test","Saat upload tugas","Setelah laporan"]'::jsonb,0,10,'Pretest dikerjakan sebelum mahasiswa mempelajari materi sesi.',3,1)
-		 ) AS seed(session_id,question,options,correct_option,points,explanation,sort_order,created_by)
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'pretest','Apa tujuan pretest dalam praktikum?','["Mengukur pemahaman awal","Menilai akhir pembelajaran","Mengganti presensi","Membuat laporan akhir"]'::jsonb,0,10,'Pretest dipakai untuk mengukur pemahaman awal mahasiswa.',1,1),
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'pretest','Apa keluaran utama dari pretest?','["Nilai awal","Nilai tugas","Nilai presensi","Nilai laporan"]'::jsonb,0,10,'Pretest menghasilkan nilai awal sebelum pembelajaran dimulai.',2,1),
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'pretest','Kapan pretest dikerjakan?','["Sebelum materi","Setelah post-test","Saat upload tugas","Setelah laporan"]'::jsonb,0,10,'Pretest dikerjakan sebelum mahasiswa mempelajari materi sesi.',3,1),
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'posttest','Setelah praktikum, apa fungsi post-test?','["Mengukur pemahaman akhir","Mengukur pemahaman awal","Mengganti presensi","Menentukan jadwal"]'::jsonb,0,10,'Post-test mengukur pemahaman akhir setelah materi dipelajari.',1,1),
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'posttest','Nilai pretest dan post-test dipakai untuk menghitung apa?','["N-Gain","Presensi","Jumlah SKS","Kuota kelas"]'::jsonb,0,10,'Selisih ternormalisasi pretest dan post-test menghasilkan N-Gain.',2,1),
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),'posttest','Nilai N-Gain 0,75 termasuk kategori apa?','["Tinggi","Sedang","Rendah","Tidak valid"]'::jsonb,0,10,'Menurut Hake, N-Gain >= 0,70 termasuk kategori tinggi.',3,1)
+		 ) AS seed(session_id,assessment_type,question,options,correct_option,points,explanation,sort_order,created_by)
 		 WHERE seed.session_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM session_pretest_questions)`,
-		`INSERT INTO session_pretest_submissions (session_id,student_id,answers,score,max_score,status,submitted_at)
+		`INSERT INTO session_pretest_submissions (session_id,student_id,assessment_type,answers,score,max_score,status,submitted_at)
 		 SELECT * FROM (
 			VALUES
-				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),1,'[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":0}]'::jsonb,100,100,'completed',CURRENT_TIMESTAMP),
-				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),2,'[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":1},{"questionId":3,"answerIndex":0}]'::jsonb,66,100,'completed',CURRENT_TIMESTAMP)
-		 ) AS seed(session_id,student_id,answers,score,max_score,status,submitted_at)
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),1,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":0}]'::jsonb,100,100,'completed',CURRENT_TIMESTAMP),
+				((SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1 LIMIT 1),2,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":1},{"questionId":3,"answerIndex":0}]'::jsonb,66,100,'completed',CURRENT_TIMESTAMP)
+		 ) AS seed(session_id,student_id,assessment_type,answers,score,max_score,status,submitted_at)
 		 WHERE seed.session_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM session_pretest_submissions)`,
 	}
 	for _, s := range stmts {
@@ -2790,6 +2805,70 @@ func (r *Repository) GetSubmissionDetail(submissionID int) (map[string]interface
 		JOIN courses c ON c.id = sa.course_id
 		WHERE sub.id = $1
 	`, submissionID).Scan(&payload)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]interface{}
+	if err := json.Unmarshal(payload, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// StudentAssignmentSubmission mengembalikan pengumpulan milik satu mahasiswa untuk
+// sebuah tugas, dipakai halaman "Lihat Detail" di sisi mahasiswa. Bila belum ada
+// pengumpulan, dikembalikan bentuk kosong agar antarmuka tetap bisa ditampilkan.
+func (r *Repository) StudentAssignmentSubmission(assignmentID int, studentID int) (map[string]interface{}, error) {
+	var payload []byte
+	err := r.db.QueryRow(`
+		SELECT json_build_object(
+			'submission', json_build_object(
+				'id', sub.id,
+				'assignmentId', sub.assignment_id,
+				'studentId', sub.student_id,
+				'answerText', COALESCE(sub.answer_text, ''),
+				'fileUrl', COALESCE(sub.file_url, ''),
+				'fileName', COALESCE(sub.file_name, ''),
+				'fileSize', COALESCE(sub.file_size, ''),
+				'submittedAt', COALESCE(to_char(sub.submitted_at, 'YYYY-MM-DD HH24:MI'), ''),
+				'score', sub.score,
+				'feedback', COALESCE(sub.feedback, '')
+			),
+			'student', json_build_object('id', s.id, 'name', s.name, 'nim', s.student_id, 'email', s.email),
+			'assignment', json_build_object(
+				'id', sa.id, 'title', sa.title, 'description', sa.description, 'dueDate', sa.due_date,
+				'courseId', sa.course_id, 'courseName', c.name, 'instructor', c.instructor, 'assistant', c.assistant
+			)
+		)
+		FROM student_submissions sub
+		JOIN students s ON s.id = sub.student_id
+		JOIN session_assignments sa ON sa.id = sub.assignment_id
+		JOIN courses c ON c.id = sa.course_id
+		WHERE sub.assignment_id = $1 AND sub.student_id = $2
+	`, assignmentID, studentID).Scan(&payload)
+	if errors.Is(err, sql.ErrNoRows) {
+		// Tugas ada tapi belum dikumpulkan: kembalikan info tugas dengan submission kosong.
+		var info []byte
+		infoErr := r.db.QueryRow(`
+			SELECT json_build_object(
+				'submission', NULL,
+				'student', (SELECT json_build_object('id', s.id, 'name', s.name, 'nim', s.student_id, 'email', s.email) FROM students s WHERE s.id=$2),
+				'assignment', json_build_object(
+					'id', sa.id, 'title', sa.title, 'description', sa.description, 'dueDate', sa.due_date,
+					'courseId', sa.course_id, 'courseName', c.name, 'instructor', c.instructor, 'assistant', c.assistant
+				)
+			)
+			FROM session_assignments sa JOIN courses c ON c.id = sa.course_id WHERE sa.id = $1
+		`, assignmentID, studentID).Scan(&info)
+		if infoErr != nil {
+			return nil, infoErr
+		}
+		var empty map[string]interface{}
+		if err := json.Unmarshal(info, &empty); err != nil {
+			return nil, err
+		}
+		return empty, nil
+	}
 	if err != nil {
 		return nil, err
 	}

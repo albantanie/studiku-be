@@ -131,8 +131,20 @@ func Register(r *gin.Engine, h *Handler) {
 		api.POST("/assistant/sessions/:id/pretest/questions", requireRole("aslab"), h.CreatePretestQuestion)
 		api.PUT("/assistant/sessions/:id/pretest/questions/:questionId", requireRole("aslab"), h.UpdatePretestQuestion)
 		api.DELETE("/assistant/sessions/:id/pretest/questions/:questionId", requireRole("aslab"), h.DeletePretestQuestion)
+		api.GET("/student/assignments/:id/submission", requireRole("student"), h.GetStudentAssignmentSubmission)
 		api.GET("/student/sessions/:id/pretest", requireRole("student"), h.GetStudentSessionPretest)
 		api.POST("/student/sessions/:id/pretest/submit", requireRole("student"), h.SubmitStudentPretest)
+		// Rute quiz melayani pretest dan post-test lewat query string ?type=.
+		// Rute /pretest di atas dipertahankan sebagai jalur lama.
+		api.GET("/assistant/sessions/:id/quiz", requireRole("aslab"), h.GetAssistantSessionQuiz)
+		api.POST("/assistant/sessions/:id/quiz/questions", requireRole("aslab"), h.CreateQuizQuestion)
+		api.PUT("/assistant/sessions/:id/quiz/questions/:questionId", requireRole("aslab"), h.UpdateQuizQuestion)
+		api.DELETE("/assistant/sessions/:id/quiz/questions/:questionId", requireRole("aslab"), h.DeleteQuizQuestion)
+		api.GET("/student/sessions/:id/quiz", requireRole("student"), h.GetStudentSessionQuiz)
+		api.POST("/student/sessions/:id/quiz/submit", requireRole("student"), h.SubmitStudentQuiz)
+		api.GET("/sessions/:id/ngain", requireRole("admin", "kalab", "laboran", "aslab"), h.GetSessionNGain)
+		api.GET("/courses/:id/ngain", requireRole("admin", "kalab", "laboran", "aslab"), h.GetCourseNGain)
+		api.GET("/student/sessions/:id/ngain", requireRole("student"), h.GetStudentOwnSessionNGain)
 		api.POST("/assistant/sessions/:id/reports", requireRole("aslab"), h.SubmitAssistantSessionReport)
 		api.PUT("/lecturer/reports/:id/approve", requireRole("kalab"), h.ApproveAssistantReport)
 		api.PUT("/lecturer/reports/:id/reject", requireRole("kalab"), h.RejectAssistantReport)
@@ -849,174 +861,39 @@ func saveUploadedFile(fileHeader *multipart.FileHeader, path string) error {
 
 func reportPDFBytes(doc *models.ReportDocument) []byte {
 	report := doc.Report
-	passed := 0
-	for _, student := range doc.Students {
-		if student.Passed {
-			passed++
-		}
-	}
-	failed := len(doc.Students) - passed
-	passRate := 0.0
-	if len(doc.Students) > 0 {
-		passRate = float64(passed) * 100 / float64(len(doc.Students))
-	}
-	averageScore := 0.0
-	for _, student := range doc.Students {
-		averageScore += student.FinalScore
-	}
-	if len(doc.Students) > 0 {
-		averageScore = averageScore / float64(len(doc.Students))
-	}
 	institution := doc.Institution
 
 	lines := []string{
-		"LAPORAN PELAKSANAAN PRAKTIKUM",
-		strings.ToUpper(emptyDash(institution.LaboratoryName)),
-		fmt.Sprintf("%s - %s", emptyDash(doc.AcademicYear), strings.ToUpper(emptyDash(doc.Semester))),
+		fmt.Sprintf("PERIODE : %s %s", strings.ToUpper(emptyDash(doc.AcademicYear)), strings.ToUpper(emptyDash(doc.Semester))),
 		"",
-		strings.ToUpper(emptyDash(institution.UniversityName)),
-		emptyDash(institution.FacultyName),
-		emptyDash(institution.StudyProgramName),
-		fmt.Sprintf("Kampus A: %s", emptyDash(institution.CampusAAddress)),
-		fmt.Sprintf("Kampus B: %s", emptyDash(institution.CampusBAddress)),
-		fmt.Sprintf("Website: %s | Email: %s | Telp: %s", emptyDash(institution.Website), emptyDash(institution.Email), emptyDash(institution.Phone)),
+		fmt.Sprintf("Mata kuliah      : %s", report.CourseName),
+		fmt.Sprintf("Dosen Pengajar   : %s", emptyDash(doc.Instructor)),
+		fmt.Sprintf("Kelas / Kelompok : %s", report.Class),
+		fmt.Sprintf("Kode Mata kuliah : %s", report.CourseCode),
+		fmt.Sprintf("Nama Kelas       : %s", report.Class),
+		fmt.Sprintf("SKS              : %d", doc.Credits),
 		"",
-		"REKAP PRAKTIKUM",
-		fmt.Sprintf("Mata Kuliah : %s", report.CourseName),
-		fmt.Sprintf("Kode/Kelas  : %s / %s", report.CourseCode, report.Class),
-		fmt.Sprintf("Program     : %s", emptyDash(doc.Program)),
-		fmt.Sprintf("Periode     : %s %s", emptyDash(doc.AcademicYear), emptyDash(doc.Semester)),
-		fmt.Sprintf("SKS         : %d", doc.Credits),
-		fmt.Sprintf("Total Sesi  : %d", doc.TotalSessions),
-		fmt.Sprintf("Sesi        : %d - %s", report.Week, report.Topic),
-		fmt.Sprintf("Asisten     : %s", emptyDash(doc.Assistant)),
-		fmt.Sprintf("Pengajar    : %s", emptyDash(doc.Instructor)),
-		fmt.Sprintf("Status      : %s", report.Status),
-		fmt.Sprintf("Dikirim     : %s", emptyDash(report.SubmittedAt)),
-		"",
-		"RINGKASAN KELULUSAN",
-		"No  Nama Praktikum                         Jml Mhs  Lulus  Tidak Lulus  %Lulus",
-		fmt.Sprintf("1   %-38s %7d %6d %12d %7.0f%%", truncatePDFText(report.CourseName, 38), len(doc.Students), passed, failed, passRate),
-		fmt.Sprintf("Rata-rata Nilai Akhir: %.2f", averageScore),
-		"",
-		"PERSONEL PRAKTIKUM",
-		"No  Nama                           Role          Identifier       Keterangan",
+		"PRESENSI MAHASISWA",
+		"No  NPM             Nama                           Pertemuan Alfa Hadir Ijin Sakit Presentase",
 	}
-	for index, person := range doc.Personnel {
-		lines = append(lines, fmt.Sprintf("%-3d %-30s %-13s %-16s %s",
-			index+1,
-			truncatePDFText(person.Name, 30),
-			truncatePDFText(person.Role, 13),
-			truncatePDFText(person.Identifier, 16),
-			truncatePDFText(person.Note, 30),
-		))
+	for _, student := range doc.Students {
+		lines = append(lines, fmt.Sprintf("%-3d %-15s %-30s %9d %4d %5d %4d %5d %9.2f",
+			student.No, truncatePDFText(student.NIM, 15), truncatePDFText(student.Name, 30),
+			student.Meetings, student.Absent, student.Present, student.Permit, student.Sick, student.AttendancePercent))
 	}
 	lines = append(lines,
 		"",
-		"LAPORAN PRESENSI, LOG ACTIVITY DAN NILAI AKHIR",
-		"NILAI PERKULIAHAN MAHASISWA",
-		fmt.Sprintf("PRODI   : %s", strings.ToUpper(emptyDash(doc.Program))),
-		fmt.Sprintf("PERIODE : %s %s", emptyDash(doc.AcademicYear), emptyDash(doc.Semester)),
-		fmt.Sprintf("Mata Kuliah : %s", report.CourseName),
-		fmt.Sprintf("Nama Kelas  : %s", report.Class),
-		"",
-		"No  NPM             Nama Mahasiswa                 Presensi Pretest Tugas Praktikum PostTest Nilai Grade Status",
+		"NILAI AKHIR MAHASISWA",
+		"No  NPM             Nama Mahasiswa                 Tugas(30%) UAS(35%) Praktikum(35%) Nilai Grade Lulus",
 	)
 	for _, student := range doc.Students {
-		lulus := "Tidak Lulus"
+		lulus := ""
 		if student.Passed {
 			lulus = "Lulus"
 		}
-		lines = append(lines, fmt.Sprintf("%-3d %-15s %-30s %8.2f %7.2f %5.2f %9.2f %8.2f %5.2f %-5s %s",
-			student.No,
-			truncatePDFText(student.NIM, 15),
-			truncatePDFText(student.Name, 30),
-			student.AttendanceScore,
-			student.Pretest,
-			student.AssignmentScore,
-			student.Praktikum,
-			student.Posttest,
-			student.FinalScore,
-			student.Grade,
-			lulus,
-		))
-	}
-
-	lines = append(lines,
-		"",
-		"LAPORAN PERSENTASE PRESENSI MAHASISWA",
-		fmt.Sprintf("Mata Kuliah : %s", report.CourseName),
-		fmt.Sprintf("Nama Kelas  : %s", report.Class),
-		"",
-		"No  NPM             Nama                           Pertemuan Alfa Hadir Ijin Sakit Presentase",
-	)
-	for _, student := range doc.Students {
-		lines = append(lines, fmt.Sprintf("%-3d %-15s %-30s %9d %4d %5d %4d %5d %9.2f",
-			student.No,
-			truncatePDFText(student.NIM, 15),
-			truncatePDFText(student.Name, 30),
-			student.Meetings,
-			student.Absent,
-			student.Present,
-			student.Permit,
-			student.Sick,
-			student.AttendancePercent,
-		))
-	}
-	lines = append(lines,
-		"",
-		"REKAP PRETEST DAN POST-TEST",
-		"No  NPM             Nama                           Avg Pre  Avg Post  Peningkatan  Keterangan",
-	)
-	for _, student := range doc.Students {
-		improvement := student.Posttest - student.Pretest
-		description := "Tetap"
-		if improvement > 0 {
-			description = "Meningkat"
-		} else if improvement < 0 {
-			description = "Menurun"
-		}
-		lines = append(lines, fmt.Sprintf("%-3d %-15s %-30s %7.2f %8.2f %11.2f  %s",
-			student.No,
-			truncatePDFText(student.NIM, 15),
-			truncatePDFText(student.Name, 30),
-			student.Pretest,
-			student.Posttest,
-			improvement,
-			description,
-		))
-	}
-	lines = append(lines,
-		"",
-		"PROGRESS BELAJAR",
-		"No  NPM             Nama                           Presensi Pretest Materi PostTest Progress",
-	)
-	for _, student := range doc.Students {
-		lines = append(lines, fmt.Sprintf("%-3d %-15s %-30s %-8s %-7s %-6s %-8s %7.2f%%",
-			student.No,
-			truncatePDFText(student.NIM, 15),
-			truncatePDFText(student.Name, 30),
-			statusDone(student.Present > 0),
-			statusDone(student.Pretest > 0),
-			statusDone(true),
-			statusDone(student.Posttest > 0),
-			student.Progress,
-		))
-	}
-	lines = append(lines,
-		"",
-		"LOG ACTIVITY",
-		"No  Waktu             Mahasiswa                    Aktivitas       Sesi        Keterangan",
-	)
-	for _, activity := range doc.Activities {
-		lines = append(lines, fmt.Sprintf("%-3d %-17s %-28s %-14s %-10s %s",
-			activity.No,
-			truncatePDFText(activity.Time, 17),
-			truncatePDFText(activity.StudentName, 28),
-			truncatePDFText(activity.Activity, 14),
-			truncatePDFText(activity.SessionName, 10),
-			truncatePDFText(activity.Description, 32),
-		))
+		lines = append(lines, fmt.Sprintf("%-3d %-15s %-30s %10.2f %8.2f %14.2f %6.2f %-5s %s",
+			student.No, truncatePDFText(student.NIM, 15), truncatePDFText(student.Name, 30),
+			student.AssignmentScore, student.Posttest, student.Praktikum, student.FinalScore, student.Grade, lulus))
 	}
 
 	if strings.TrimSpace(report.RejectionNote) != "" {
@@ -1079,14 +956,14 @@ func renderReportHTML(doc *models.ReportDocument) (string, error) {
 			return "Tidak Lulus"
 		},
 		"done": statusDone,
-		"improvementText": func(value float64) string {
-			if value > 0 {
-				return "Meningkat"
+		// ngain menghitung N-Gain satu mahasiswa, ngainSummary merangkum sekelas.
+		"ngain": reportNGain,
+		"ngainSummary": func(students []models.ReportStudent) repositories.NGainSummary {
+			values := make([]repositories.NGainValue, 0, len(students))
+			for _, student := range students {
+				values = append(values, reportNGain(student.Pretest, student.Posttest))
 			}
-			if value < 0 {
-				return "Menurun"
-			}
-			return "Tetap"
+			return repositories.SummarizeNGainValues(values, 100)
 		},
 		"minus": func(a float64, b float64) float64 { return a - b },
 		"add":   func(a int, b int) int { return a + b },
@@ -1144,92 +1021,40 @@ const reportHTMLTemplate = `<!DOCTYPE html>
     .no-border td{border:0;padding:3px 0}
     .signatures{display:grid;grid-template-columns:1fr 1fr;gap:48px;margin-top:32px;text-align:center}
     .signature-space{height:70px}
+    .ngain-formula{font-size:11px;color:#374151;background:#f9fafb;border-left:3px solid #9ca3af;padding:8px 10px;margin:6px 0 12px}
+    .report-head{margin-bottom:16px}
+    .period{text-align:center;font-weight:bold;font-size:14px;text-transform:uppercase;margin-bottom:10px}
+    .head-info{font-size:12px}
+    .head-info td{border:0;padding:2px 6px 2px 0}
+    .head-info .rlabel{padding-left:24px}
+    td.c,th{text-align:center}
+    td{text-align:left}
     @media print{body{margin:18mm}.page-break{page-break-before:always}}
   </style>
 </head>
 <body>
-  <section class="cover">
-    <h1>Laporan Pelaksanaan Praktikum</h1>
-    <div>{{upper (dash .Doc.Institution.LaboratoryName)}}</div>
-    <div>{{dash .Doc.AcademicYear}} - {{upper (dash .Doc.Semester)}}</div>
-  </section>
-
-  <section>
-    <h2>{{dash .Doc.Institution.UniversityName}}</h2>
-    <div>{{dash .Doc.Institution.FacultyName}} - {{dash .Doc.Institution.StudyProgramName}}</div>
-    <div class="muted">Kampus A: {{dash .Doc.Institution.CampusAAddress}}</div>
-    <div class="muted">Kampus B: {{dash .Doc.Institution.CampusBAddress}}</div>
-    <div class="muted">{{dash .Doc.Institution.Website}} | {{dash .Doc.Institution.Email}} | {{dash .Doc.Institution.Phone}}</div>
-  </section>
-
-  <section>
-    <h2>Informasi Praktikum</h2>
-    <table class="no-border">
-      <tr><td>Mata Kuliah / Praktikum</td><td>: {{.Doc.Report.CourseName}}</td></tr>
-      <tr><td>Kode / Kelas</td><td>: {{.Doc.Report.CourseCode}} / {{.Doc.Report.Class}}</td></tr>
-      <tr><td>SKS</td><td>: {{.Doc.Credits}}</td></tr>
-      <tr><td>Periode</td><td>: {{dash .Doc.AcademicYear}} {{dash .Doc.Semester}}</td></tr>
-      <tr><td>Total Sesi</td><td>: {{.Doc.TotalSessions}}</td></tr>
-      <tr><td>Generated At</td><td>: {{.GeneratedAt}}</td></tr>
-      <tr><td>Generated By</td><td>: {{dash .Doc.Assistant}}</td></tr>
-      <tr><td>Status Approval</td><td>: {{.Doc.Report.Status}}</td></tr>
+  <section class="report-head">
+    <div class="period">PERIODE : {{upper (dash .Doc.AcademicYear)}} {{upper (dash .Doc.Semester)}}</div>
+    <table class="no-border head-info">
+      <tr><td>Mata kuliah</td><td>: {{dash .Doc.Report.CourseName}}</td><td class="rlabel">Nama Kelas</td><td>: {{dash .Doc.Report.Class}}</td></tr>
+      <tr><td>Dosen Pengajar</td><td>: {{dash .Doc.Instructor}}</td><td class="rlabel">Kode Mata kuliah</td><td>: {{dash .Doc.Report.CourseCode}}</td></tr>
+      <tr><td>Kelas / Kelompok</td><td>: {{dash .Doc.Report.Class}}</td><td class="rlabel">SKS</td><td>: {{.Doc.Credits}}</td></tr>
     </table>
   </section>
 
   <section>
-    <h2>Rekap Jumlah Praktikan</h2>
+    <h3>Presensi Mahasiswa</h3>
     <table>
-      <thead><tr><th>No</th><th>Nama Praktikum</th><th>Kelas</th><th>Jumlah Mahasiswa</th><th>Lulus</th><th>Tidak Lulus</th><th>% Lulus</th><th>Rata-rata</th></tr></thead>
-      <tbody><tr><td>1</td><td>{{.Doc.Report.CourseName}}</td><td>{{.Doc.Report.Class}}</td><td>{{len .Doc.Students}}</td><td>{{.Passed}}</td><td>{{.Failed}}</td><td>{{printf "%.2f" .PassRate}}%</td><td>{{printf "%.2f" .AverageScore}}</td></tr></tbody>
-    </table>
-  </section>
-
-  <section>
-    <h2>Data Pengajar / Laboran / Kalab / Aslab</h2>
-    <table>
-      <thead><tr><th>No</th><th>Nama</th><th>Role</th><th>NIDN/NPM/NIP</th><th>Keterangan</th></tr></thead>
-      <tbody>{{range $i, $p := .Doc.Personnel}}<tr><td>{{printf "%d" (add $i 1)}}</td><td>{{$p.Name}}</td><td>{{$p.Role}}</td><td>{{$p.Identifier}}</td><td>{{$p.Note}}</td></tr>{{end}}</tbody>
+      <thead><tr><th>No</th><th>NPM</th><th>Nama</th><th>Pertemuan</th><th>Alfa</th><th>Hadir</th><th>Ijin</th><th>Sakit</th><th>Presentase</th></tr></thead>
+      <tbody>{{range .Doc.Students}}<tr><td>{{.No}}</td><td>{{.NIM}}</td><td>{{.Name}}</td><td class="c">{{.Meetings}}</td><td class="c">{{if gt .Absent 0}}{{.Absent}}{{end}}</td><td class="c">{{if gt .Present 0}}{{.Present}}{{end}}</td><td class="c">{{if gt .Permit 0}}{{.Permit}}{{end}}</td><td class="c">{{if gt .Sick 0}}{{.Sick}}{{end}}</td><td class="c">{{printf "%.2f" .AttendancePercent}}</td></tr>{{end}}</tbody>
     </table>
   </section>
 
   <section class="page-break">
-    <h2>Laporan Presensi, Log Activity dan Nilai Akhir</h2>
     <h3>Nilai Akhir Mahasiswa</h3>
     <table>
-      <thead><tr><th>No</th><th>NPM</th><th>Nama Mahasiswa</th><th>Presensi</th><th>Pretest</th><th>Tugas</th><th>Praktikum</th><th>Post-Test</th><th>Nilai Akhir</th><th>Grade</th><th>Status</th></tr></thead>
-      <tbody>{{range .Doc.Students}}<tr><td>{{.No}}</td><td>{{.NIM}}</td><td>{{.Name}}</td><td>{{printf "%.2f" .AttendanceScore}}</td><td>{{printf "%.2f" .Pretest}}</td><td>{{printf "%.2f" .AssignmentScore}}</td><td>{{printf "%.2f" .Praktikum}}</td><td>{{printf "%.2f" .Posttest}}</td><td>{{printf "%.2f" .FinalScore}}</td><td>{{.Grade}}</td><td>{{status .Passed}}</td></tr>{{end}}</tbody>
-    </table>
-  </section>
-
-  <section>
-    <h2>Presensi Mahasiswa</h2>
-    <table>
-      <thead><tr><th>No</th><th>NPM</th><th>Nama Mahasiswa</th><th>Pertemuan</th><th>Alfa</th><th>Hadir</th><th>Izin</th><th>Sakit</th><th>Persentase</th></tr></thead>
-      <tbody>{{range .Doc.Students}}<tr><td>{{.No}}</td><td>{{.NIM}}</td><td>{{.Name}}</td><td>{{.Meetings}}</td><td>{{.Absent}}</td><td>{{.Present}}</td><td>{{.Permit}}</td><td>{{.Sick}}</td><td>{{printf "%.2f" .AttendancePercent}}%</td></tr>{{end}}</tbody>
-    </table>
-  </section>
-
-  <section>
-    <h2>Rekap Pretest dan Post-Test</h2>
-    <table>
-      <thead><tr><th>No</th><th>NPM</th><th>Nama Mahasiswa</th><th>Rata-rata Pretest</th><th>Rata-rata Post-Test</th><th>Peningkatan</th><th>Keterangan</th></tr></thead>
-      <tbody>{{range .Doc.Students}}{{ $imp := minus .Posttest .Pretest }}<tr><td>{{.No}}</td><td>{{.NIM}}</td><td>{{.Name}}</td><td>{{printf "%.2f" .Pretest}}</td><td>{{printf "%.2f" .Posttest}}</td><td>{{printf "%.2f" $imp}}</td><td>{{improvementText $imp}}</td></tr>{{end}}</tbody>
-    </table>
-  </section>
-
-  <section>
-    <h2>Progress Belajar</h2>
-    <table>
-      <thead><tr><th>No</th><th>NPM</th><th>Nama Mahasiswa</th><th>Presensi</th><th>Pretest</th><th>Materi</th><th>Post-Test</th><th>Progress</th></tr></thead>
-      <tbody>{{range .Doc.Students}}<tr><td>{{.No}}</td><td>{{.NIM}}</td><td>{{.Name}}</td><td>{{done (gt .Present 0)}}</td><td>{{done (gt .Pretest 0.0)}}</td><td>Selesai</td><td>{{done (gt .Posttest 0.0)}}</td><td>{{printf "%.2f" .Progress}}%</td></tr>{{end}}</tbody>
-    </table>
-  </section>
-
-  <section>
-    <h2>Log Activity</h2>
-    <table>
-      <thead><tr><th>No</th><th>Waktu</th><th>Mahasiswa</th><th>Aktivitas</th><th>Kursus</th><th>Sesi</th><th>Keterangan</th></tr></thead>
-      <tbody>{{range .Doc.Activities}}<tr><td>{{.No}}</td><td>{{.Time}}</td><td>{{.StudentName}}</td><td>{{.Activity}}</td><td>{{.CourseName}}</td><td>{{.SessionName}}</td><td>{{.Description}}</td></tr>{{end}}</tbody>
+      <thead><tr><th>No</th><th>NPM</th><th>Nama Mahasiswa</th><th>TUGAS (30%)</th><th>UJIAN AKHIR SEMESTER (35%)</th><th>PRAKTIKUM (35%)</th><th>Nilai</th><th>Grade</th><th>Lulus</th><th>Sunting KRS?</th><th>Info</th></tr></thead>
+      <tbody>{{range .Doc.Students}}<tr><td>{{.No}}</td><td>{{.NIM}}</td><td>{{.Name}}</td><td class="c">{{printf "%.2f" .AssignmentScore}}</td><td class="c">{{printf "%.2f" .Posttest}}</td><td class="c">{{printf "%.2f" .Praktikum}}</td><td class="c">{{printf "%.2f" .FinalScore}}</td><td class="c">{{.Grade}}</td><td class="c">{{if .Passed}}&#10003;{{end}}</td><td></td><td></td></tr>{{end}}</tbody>
     </table>
   </section>
 
@@ -1247,6 +1072,16 @@ func statusDone(done bool) string {
 		return "Selesai"
 	}
 	return "Belum"
+}
+
+// reportNGain menghitung N-Gain satu baris laporan. Nilai pretest dan post-test
+// yang sama-sama nol berarti mahasiswa belum mengerjakan tes apa pun, bukan
+// benar-benar mendapat nol, jadi barisnya ditandai belum lengkap.
+func reportNGain(pre float64, post float64) repositories.NGainValue {
+	if pre <= 0 && post <= 0 {
+		return repositories.ComputeNGain(nil, nil, 100)
+	}
+	return repositories.ComputeNGain(&pre, &post, 100)
 }
 
 func signerByRole(signers []models.ReportSigner, role string) models.ReportSigner {
@@ -1930,6 +1765,129 @@ func (h *Handler) SubmitStudentPretest(c *gin.Context) {
 	respond(c, data, err)
 }
 
+// quizTypeParam mengambil jenis tes dari query string, dengan isi body sebagai
+// cadangan. Kosong berarti pretest, ditentukan di lapisan repository.
+func quizTypeParam(c *gin.Context, fallback string) string {
+	if value := c.Query("type"); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func (h *Handler) GetAssistantSessionQuiz(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	authUser, _ := currentAuthUser(c)
+	data, err := h.repo.SessionQuiz(id, authUser.ID, authUser.Role, quizTypeParam(c, ""))
+	respond(c, data, err)
+}
+
+func (h *Handler) GetStudentSessionQuiz(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	authUser, _ := currentAuthUser(c)
+	data, err := h.repo.SessionQuiz(id, authUser.ID, authUser.Role, quizTypeParam(c, ""))
+	respond(c, data, err)
+}
+
+func (h *Handler) CreateQuizQuestion(c *gin.Context) {
+	sessionID, err := pathID(c)
+	if err != nil {
+		return
+	}
+	authUser, _ := currentAuthUser(c)
+	var payload models.QuizQuestionInput
+	if bind(c, &payload) {
+		return
+	}
+	data, err := h.repo.CreateQuizQuestion(sessionID, authUser.ID, quizTypeParam(c, payload.Type), &payload)
+	respond(c, data, err)
+}
+
+func (h *Handler) UpdateQuizQuestion(c *gin.Context) {
+	if _, err := pathID(c); err != nil {
+		return
+	}
+	questionID, err := pathParamID(c, "questionId")
+	if err != nil {
+		return
+	}
+	var payload models.QuizQuestionInput
+	if bind(c, &payload) {
+		return
+	}
+	data, err := h.repo.UpdateQuizQuestion(questionID, quizTypeParam(c, payload.Type), &payload)
+	respond(c, data, err)
+}
+
+func (h *Handler) DeleteQuizQuestion(c *gin.Context) {
+	if _, err := pathID(c); err != nil {
+		return
+	}
+	questionID, err := pathParamID(c, "questionId")
+	if err != nil {
+		return
+	}
+	err = h.repo.DeleteQuizQuestion(questionID)
+	respond(c, gin.H{"id": questionID}, err)
+}
+
+func (h *Handler) SubmitStudentQuiz(c *gin.Context) {
+	sessionID, err := pathID(c)
+	if err != nil {
+		return
+	}
+	authUser, _ := currentAuthUser(c)
+	var payload models.QuizSubmissionInput
+	if bind(c, &payload) {
+		return
+	}
+	data, err := h.repo.SubmitQuiz(sessionID, authUser.ID, quizTypeParam(c, payload.Type), &payload)
+	respond(c, data, err)
+}
+
+func (h *Handler) GetSessionNGain(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.SessionNGain(id)
+	respond(c, data, err)
+}
+
+func (h *Handler) GetCourseNGain(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	data, err := h.repo.CourseNGain(id)
+	respond(c, data, err)
+}
+
+// GetStudentOwnSessionNGain hanya mengembalikan N-Gain milik mahasiswa yang login,
+// tanpa membocorkan nilai teman sekelasnya.
+func (h *Handler) GetStudentOwnSessionNGain(c *gin.Context) {
+	id, err := pathID(c)
+	if err != nil {
+		return
+	}
+	authUser, _ := currentAuthUser(c)
+	value, err := h.repo.StudentSessionNGain(id, authUser.ID)
+	if err != nil {
+		respond(c, nil, err)
+		return
+	}
+	respond(c, gin.H{
+		"sessionId": id,
+		"ngain":     value,
+		"guide":     repositories.NGainGuide(),
+	}, nil)
+}
+
 func (h *Handler) UpsertAssistantStudentSessionAssessment(c *gin.Context) {
 	id, err := pathID(c)
 	if err != nil {
@@ -2035,5 +1993,17 @@ func (h *Handler) GetSubmissionDetail(c *gin.Context) {
 		return
 	}
 	data, err := h.repo.GetSubmissionDetail(id)
+	respond(c, data, err)
+}
+
+// GetStudentAssignmentSubmission mengambil pengumpulan milik mahasiswa yang login
+// untuk sebuah tugas, dipakai tombol "Lihat Detail" di daftar tugas kursus.
+func (h *Handler) GetStudentAssignmentSubmission(c *gin.Context) {
+	assignmentID, err := pathID(c)
+	if err != nil {
+		return
+	}
+	authUser, _ := currentAuthUser(c)
+	data, err := h.repo.StudentAssignmentSubmission(assignmentID, authUser.ID)
 	respond(c, data, err)
 }

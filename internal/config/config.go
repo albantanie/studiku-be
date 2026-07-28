@@ -16,6 +16,9 @@ type Config struct {
 	ServerPort     string
 	AllowedOrigins string
 	UploadDir      string
+	// WebDir menunjuk ke hasil build frontend (react-fe/dist). Bila foldernya ada,
+	// server ikut menyajikan berkas statis dan menangani deep link di satu origin.
+	WebDir string
 }
 
 func Load() *Config {
@@ -31,6 +34,7 @@ func Load() *Config {
 		ServerPort:     getEnv("SERVER_PORT", "8080"),
 		AllowedOrigins: getEnv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173"),
 		UploadDir:      getEnv("UPLOAD_DIR", "uploads"),
+		WebDir:         getEnv("WEB_DIR", "../react-fe/dist"),
 	}
 }
 

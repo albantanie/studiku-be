@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"log"
+	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/gin-gonic/gin"
@@ -71,11 +73,64 @@ func runREST() {
 	repo := repositories.New(db)
 	handler := handlers.New(repo)
 	handlers.Register(router, handler)
+	serveFrontend(router, cfg.WebDir)
 
 	log.Printf("REST API listening on :%s", cfg.ServerPort)
 	if err := router.Run(":" + cfg.ServerPort); err != nil {
 		log.Fatal(err)
 	}
+}
+
+// serveFrontend menyajikan hasil build React dari satu origin yang sama dengan API.
+//
+// Aplikasi memakai routing sisi klien, jadi URL seperti /student/courses/3/sessions/5
+// tidak punya berkas padanannya di disk. Permintaan yang bukan API dan bukan berkas
+// nyata dikembalikan sebagai index.html supaya refresh dan tautan langsung tetap
+// membuka halaman yang benar, lalu router di browser yang menentukan tampilannya.
+//
+// Bila folder build belum ada, fungsi ini tidak melakukan apa-apa: mode pengembangan
+// tetap memakai vite dev server yang mem-proxy /api ke sini.
+func serveFrontend(router *gin.Engine, webDir string) {
+	indexPath := filepath.Join(webDir, "index.html")
+	if _, err := os.Stat(indexPath); err != nil {
+		log.Printf("frontend build tidak ditemukan di %s, server hanya melayani API", webDir)
+		return
+	}
+
+	router.Static("/assets", filepath.Join(webDir, "assets"))
+	for _, name := range []string{"favicon.ico", "robots.txt", "manifest.json"} {
+		path := filepath.Join(webDir, name)
+		if _, err := os.Stat(path); err == nil {
+			router.StaticFile("/"+name, path)
+		}
+	}
+
+	router.NoRoute(func(c *gin.Context) {
+		requestPath := c.Request.URL.Path
+
+		// Jalur API harus tetap menjawab 404 sebagai JSON. Tanpa penjagaan ini,
+		// salah ketik endpoint akan membalas HTML dan menyesatkan klien.
+		if strings.HasPrefix(requestPath, "/api") {
+			c.JSON(http.StatusNotFound, gin.H{"success": false, "error": "endpoint tidak ditemukan"})
+			return
+		}
+
+		// Berkas statis yang benar-benar ada dilayani apa adanya.
+		if requestPath != "/" {
+			candidate := filepath.Join(webDir, filepath.Clean(requestPath))
+			// filepath.Clean menormalkan "..", lalu dipastikan hasilnya masih di dalam webDir.
+			if strings.HasPrefix(candidate, filepath.Clean(webDir)+string(os.PathSeparator)) {
+				if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+					c.File(candidate)
+					return
+				}
+			}
+		}
+
+		c.File(indexPath)
+	})
+
+	log.Printf("menyajikan frontend dari %s", webDir)
 }
 
 func runSQL(path string) {
