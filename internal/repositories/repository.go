@@ -343,12 +343,12 @@ func (r *Repository) ChangePassword(id int, role string, currentPassword string,
 	return r.setPassword(id, role, hashed, true)
 }
 
-func (r *Repository) Dashboard() (map[string]interface{}, error) {
-	courses, err := r.StudentCourses()
+func (r *Repository) Dashboard(studentID int) (map[string]interface{}, error) {
+	courses, err := r.StudentCourses(studentID)
 	if err != nil {
 		return nil, err
 	}
-	assignments, err := r.Assignments(0)
+	assignments, err := r.Assignments(studentID)
 	if err != nil {
 		return nil, err
 	}
@@ -372,9 +372,12 @@ func (r *Repository) Dashboard() (map[string]interface{}, error) {
 			deadlines = append(deadlines, models.DashboardDeadline{ID: a.ID, Title: a.Title, Course: a.Course, DueDate: a.DueDate, Urgent: false})
 		}
 	}
-	var pendingTaskCount int
-	if err := r.db.QueryRow(`SELECT count(*) FROM assignments WHERE status='pending'`).Scan(&pendingTaskCount); err != nil {
-		return nil, err
+	// Jumlah tugas belum dikumpulkan milik mahasiswa ini.
+	pendingTaskCount := 0
+	for _, a := range assignments {
+		if a.Status == "pending" {
+			pendingTaskCount++
+		}
 	}
 	return map[string]interface{}{"todayCourses": today, "upcomingDeadlines": deadlines, "pendingTaskCount": pendingTaskCount}, nil
 }
@@ -392,8 +395,16 @@ func indonesianWeekday(day time.Weekday) string {
 	return days[day]
 }
 
-func (r *Repository) StudentCourses() ([]models.StudentCourse, error) {
-	rows, err := r.db.Query(`SELECT id, name, instructor, assistant, day, start_time, end_time, room, attendance_present, attendance_total, color FROM courses ORDER BY id LIMIT 5`)
+func (r *Repository) StudentCourses(studentID int) ([]models.StudentCourse, error) {
+	// Hanya kursus dari kelas yang diikuti mahasiswa. studentID 0 (mis. pratinjau)
+	// mengembalikan seluruh kursus supaya perilaku lama tidak berubah drastis.
+	rows, err := r.db.Query(`
+		SELECT c.id, c.name, c.instructor, c.assistant, c.day, c.start_time, c.end_time, c.room, c.attendance_present, c.attendance_total, c.color
+		FROM courses c
+		WHERE $1 = 0 OR EXISTS (
+			SELECT 1 FROM classes cls WHERE cls.code = c.class_code AND $1 = ANY(cls.students)
+		)
+		ORDER BY c.id`, studentID)
 	if err != nil {
 		return nil, err
 	}
@@ -1843,7 +1854,7 @@ func gradeFromScore(value float64) string {
 
 func (r *Repository) ApproveReportByRole(id int, role string, userID int) error {
 	switch role {
-	case "laboran":
+	case "laboran", "admin":
 		_, err := r.db.Exec(`
 			UPDATE assistant_reports
 			SET status='submitted_to_kalab',
@@ -1876,7 +1887,7 @@ func (r *Repository) RejectReportByRole(id int, role string, userID int, note st
 		return errors.New("catatan penolakan wajib diisi")
 	}
 	switch role {
-	case "laboran":
+	case "laboran", "admin":
 		_, err := r.db.Exec(`
 			UPDATE assistant_reports
 			SET status='rejected_by_laboran',
@@ -2297,6 +2308,13 @@ func (r *Repository) UpdateCourseSession(id int, input *models.UpdateSessionInpu
 	_, err := r.db.Exec(`
 		UPDATE course_sessions SET session_date=$1, sort_order=$2 WHERE id=$3
 	`, input.SessionDate, input.SortOrder, id)
+	return err
+}
+
+// DeleteCourseSession menghapus satu sesi. Baris turunan (soal, jawaban, materi,
+// tugas, penilaian) ikut terhapus lewat ON DELETE CASCADE pada foreign key-nya.
+func (r *Repository) DeleteCourseSession(id int) error {
+	_, err := r.db.Exec(`DELETE FROM course_sessions WHERE id=$1`, id)
 	return err
 }
 

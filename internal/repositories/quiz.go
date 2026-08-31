@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"studi-ku-backend/internal/models"
@@ -114,6 +115,14 @@ func (r *Repository) SessionQuiz(sessionID int, studentID int, role string, quiz
 			return nil, err
 		}
 		payload["ngain"] = value
+
+		// Kunci akses bila sesi sebelumnya belum diselesaikan (akses berurutan).
+		locked, reason, err := r.priorSessionLock(sessionID, studentID)
+		if err != nil {
+			return nil, err
+		}
+		payload["locked"] = locked
+		payload["lockReason"] = reason
 	}
 
 	data, err := json.Marshal(payload)
@@ -189,6 +198,67 @@ func (r *Repository) DeleteQuizQuestion(questionID int) error {
 	return err
 }
 
+// sessionQuizDone mengecek apakah mahasiswa sudah menyelesaikan seluruh tes yang
+// ada soalnya pada sebuah sesi. Sesi tanpa soal dianggap otomatis selesai.
+func (r *Repository) sessionQuizDone(sessionID int, studentID int) (bool, error) {
+	for _, qt := range []string{quizTypePretest, quizTypePosttest} {
+		count, err := r.quizQuestionCount(sessionID, qt)
+		if err != nil {
+			return false, err
+		}
+		if count == 0 {
+			continue
+		}
+		sub, err := r.quizSubmission(sessionID, studentID, qt)
+		if err != nil {
+			return false, err
+		}
+		if sub["status"] != "completed" {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+// priorSessionLock mengembalikan status terkunci bila sesi sebelumnya (nomor sesi
+// tepat di bawahnya pada mata kuliah yang sama) belum diselesaikan mahasiswa.
+// Ini membuat pretest/post-test hanya bisa diakses berurutan.
+func (r *Repository) priorSessionLock(sessionID int, studentID int) (bool, string, error) {
+	if studentID <= 0 {
+		return false, "", nil
+	}
+	var courseID, sessionNumber int
+	err := r.db.QueryRow(`SELECT course_id, session_number FROM course_sessions WHERE id=$1`, sessionID).Scan(&courseID, &sessionNumber)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, "", nil
+		}
+		return false, "", err
+	}
+
+	var prevID, prevNumber int
+	err = r.db.QueryRow(`
+		SELECT id, session_number FROM course_sessions
+		WHERE course_id=$1 AND session_number < $2
+		ORDER BY session_number DESC LIMIT 1
+	`, courseID, sessionNumber).Scan(&prevID, &prevNumber)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, "", nil // sesi pertama, tidak terkunci
+	}
+	if err != nil {
+		return false, "", err
+	}
+
+	done, err := r.sessionQuizDone(prevID, studentID)
+	if err != nil {
+		return false, "", err
+	}
+	if !done {
+		return true, fmt.Sprintf("Selesaikan Sesi %d dulu sebelum mengerjakan sesi ini.", prevNumber), nil
+	}
+	return false, "", nil
+}
+
 // SubmitQuiz menilai jawaban mahasiswa di sisi server lalu menyimpannya ke tabel
 // jawaban, tabel penanda sesi, dan tabel hasil per mahasiswa yang dibaca N-Gain.
 func (r *Repository) SubmitQuiz(sessionID int, studentID int, quizType string, payload *models.QuizSubmissionInput) (map[string]interface{}, error) {
@@ -198,6 +268,13 @@ func (r *Repository) SubmitQuiz(sessionID int, studentID int, quizType string, p
 	}
 	if studentID <= 0 {
 		return nil, errors.New("student wajib dipilih")
+	}
+
+	// Sesi harus dikerjakan berurutan: sesi sebelumnya wajib selesai lebih dulu.
+	if locked, reason, err := r.priorSessionLock(sessionID, studentID); err != nil {
+		return nil, err
+	} else if locked {
+		return nil, errors.New(reason)
 	}
 
 	questions, err := r.loadQuizQuestions(sessionID, quizType)

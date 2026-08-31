@@ -169,16 +169,6 @@ INSERT INTO assignments (id,title,course,assistant,due_date,due_time,status,cour
 ON CONFLICT (id) DO NOTHING;
 SELECT setval('assignments_id_seq', (SELECT COALESCE(MAX(id), 1) FROM assignments));
 
-INSERT INTO grades (id,course_name,code,semester,credits,grade,score,color) VALUES
-(1,'Algoritma & Struktur Data','CS301','2025/2026',4,'A',88,'bg-blue-500'),
-(2,'Basis Data Lanjutan','CS302','2025/2026',3,'A-',85,'bg-blue-500'),
-(3,'Pemrograman Web','CS303','2025/2026',3,'B+',78,'bg-blue-500'),
-(4,'Jaringan Komputer','CS304','2025/2026',3,'A',90,'bg-blue-500'),
-(5,'Interaksi Manusia Komputer','CS201','2024/2025',3,'A',92,'bg-blue-500'),
-(6,'Sistem Operasi','CS202','2024/2025',4,'B+',82,'bg-blue-500')
-ON CONFLICT (id) DO NOTHING;
-SELECT setval('grades_id_seq', (SELECT COALESCE(MAX(id), 1) FROM grades));
-
 INSERT INTO students (id,name,email,password,default_password,student_id,program,semester,courses,status,join_date,is_password_changed) VALUES
 (1,'Ahmad Rizki','ahmad.rizki@student.ac.id','password','password','TI2021001','Teknik Informatika',6,ARRAY['Pemrograman Web','Basis Data','Algoritma'],'Aktif','2021-08-15',true),
 (2,'Siti Nurhaliza','siti.nurhaliza@student.ac.id','password','password','TI2021002','Teknik Informatika',6,ARRAY['Pemrograman Web','Jaringan Komputer'],'Aktif','2021-08-15',false),
@@ -200,7 +190,6 @@ INSERT INTO lab_assistants (id,name,email,phone,student_id,role,lab,supervisor,s
 (1,'Rama Dhani','rama.dhani@student.ac.id','081234567890','TI2021001','aslab','Laboratorium Pemrograman','Dr. Budi Santoso',7,3.85,2,12,'Aktif','2024-09-01','password','password',false),
 (2,'Dina Amelia','dina.amelia@student.ac.id','082345678901','TI2021002','aslab','Laboratorium Database','Prof. Siti Aminah',7,3.92,1,8,'Aktif','2024-09-01','password','password',false),
 (3,'Fahmi Akbar','fahmi.akbar@student.ac.id','083456789012','TI2021003','aslab','Laboratorium Jaringan','Dr. Ahmad Wijaya',6,3.78,2,10,'Aktif','2024-09-01','password','password',false),
-(4,'Sari Laboran','laboran@app.com','081200000002','DEMO-LABORAN-001','laboran','Laboratorium Pemrograman','Kepala Lab Informatika',1,0,0,40,'Aktif','2024-09-01','password','password',false),
 (5,'Kepala Lab Informatika','kalab@app.com','081200000003','DEMO-KALAB-001','kalab','Kepala Laboratorium','-',1,0,0,40,'Aktif','2024-09-01','password','password',false)
 ON CONFLICT (id) DO NOTHING;
 SELECT setval('lab_assistants_id_seq', (SELECT COALESCE(MAX(id), 1) FROM lab_assistants));
@@ -647,71 +636,6 @@ INSERT INTO session_assignments (id,course_id,session_id,title,description,due_d
 ON CONFLICT (id) DO UPDATE SET course_id=EXCLUDED.course_id, session_id=EXCLUDED.session_id, title=EXCLUDED.title, description=EXCLUDED.description, due_date=EXCLUDED.due_date, status=EXCLUDED.status, score=EXCLUDED.score, submitted_count=EXCLUDED.submitted_count, total_students=EXCLUDED.total_students;
 SELECT setval('session_assignments_id_seq', (SELECT COALESCE(MAX(id), 1) FROM session_assignments));
 
-INSERT INTO session_assessments (session_id,assessment_type,title,score,max_score,status,note)
-SELECT
-  cs.id,
-  assessment.assessment_type,
-  CASE
-    WHEN assessment.assessment_type = 'pretest' THEN 'Pretest - ' || cs.topic
-    ELSE 'Post-test - ' || cs.topic
-  END,
-  CASE
-    WHEN cs.session_number = 1 AND assessment.assessment_type = 'pretest' THEN 70 + (cs.course_id % 10)
-    WHEN cs.session_number = 1 AND assessment.assessment_type = 'posttest' THEN 82 + (cs.course_id % 10)
-    WHEN cs.session_number = 2 AND assessment.assessment_type = 'pretest' THEN 68 + (cs.course_id % 10)
-    ELSE NULL
-  END,
-  100,
-  CASE
-    WHEN cs.session_number = 1 THEN 'completed'
-    WHEN cs.session_number = 2 AND assessment.assessment_type = 'pretest' THEN 'completed'
-    ELSE 'not_started'
-  END,
-  ''
-FROM course_sessions cs
-CROSS JOIN (VALUES ('pretest'), ('posttest')) AS assessment(assessment_type)
-WHERE cs.session_number <= 3
-ON CONFLICT (session_id,assessment_type) DO UPDATE SET title=EXCLUDED.title,score=EXCLUDED.score,max_score=EXCLUDED.max_score,status=EXCLUDED.status,note=EXCLUDED.note,updated_at=now();
-
-INSERT INTO session_assessment_results (session_id,student_id,assessment_type,score,max_score,status,note,submitted_at)
-SELECT
-  cs.id,
-  st.id,
-  assessment.assessment_type,
-  CASE
-    WHEN cs.session_number = 1 AND assessment.assessment_type = 'pretest' THEN 62 + (st.id % 18)
-    WHEN cs.session_number = 1 AND assessment.assessment_type = 'posttest' THEN 76 + (st.id % 16)
-    WHEN cs.session_number = 2 AND assessment.assessment_type = 'pretest' THEN 58 + (st.id % 20)
-    WHEN cs.session_number = 2 AND assessment.assessment_type = 'posttest' THEN 72 + (st.id % 18)
-    WHEN cs.session_number = 3 AND assessment.assessment_type = 'pretest' THEN 60 + (st.id % 18)
-    ELSE NULL
-  END,
-  100,
-  CASE
-    WHEN cs.session_number <= 2 THEN 'completed'
-    WHEN cs.session_number = 3 AND assessment.assessment_type = 'pretest' THEN 'completed'
-    ELSE 'not_started'
-  END,
-  CASE WHEN assessment.assessment_type = 'pretest' THEN 'Nilai awal mahasiswa' ELSE 'Nilai akhir mahasiswa' END,
-  CASE
-    WHEN cs.session_number <= 2 THEN CURRENT_TIMESTAMP
-    WHEN cs.session_number = 3 AND assessment.assessment_type = 'pretest' THEN CURRENT_TIMESTAMP
-    ELSE NULL
-  END
-FROM course_sessions cs
-JOIN courses c ON c.id=cs.course_id
-JOIN classes cls ON cls.code=c.class_code
-JOIN students st ON st.id=ANY(cls.students)
-CROSS JOIN (VALUES ('pretest'), ('posttest')) AS assessment(assessment_type)
-WHERE cs.session_number <= 3
-ON CONFLICT (session_id,student_id,assessment_type) DO UPDATE SET
-  score=EXCLUDED.score,
-  max_score=EXCLUDED.max_score,
-  status=EXCLUDED.status,
-  note=EXCLUDED.note,
-  submitted_at=EXCLUDED.submitted_at,
-  updated_at=now();
-
 -- Bank soal dipakai bersama oleh pretest dan post-test lewat kolom assessment_type.
 ALTER TABLE session_pretest_questions ADD COLUMN IF NOT EXISTS assessment_type VARCHAR(20) NOT NULL DEFAULT 'pretest';
 ALTER TABLE session_pretest_submissions ADD COLUMN IF NOT EXISTS assessment_type VARCHAR(20) NOT NULL DEFAULT 'pretest';
@@ -728,60 +652,6 @@ INSERT INTO session_pretest_questions (id,session_id,assessment_type,question,op
 (6,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),'posttest','Nilai N-Gain 0,75 termasuk kategori apa?','["Tinggi","Sedang","Rendah","Tidak valid"]'::jsonb,0,10,'Menurut Hake, N-Gain >= 0,70 termasuk kategori tinggi.',3,1)
 ON CONFLICT (id) DO UPDATE SET assessment_type=EXCLUDED.assessment_type,question=EXCLUDED.question,options=EXCLUDED.options,correct_option=EXCLUDED.correct_option,points=EXCLUDED.points,explanation=EXCLUDED.explanation,sort_order=EXCLUDED.sort_order,created_by=EXCLUDED.created_by,updated_at=now();
 SELECT setval('session_pretest_questions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM session_pretest_questions));
-
--- Semua mahasiswa CS301 mengerjakan pretest dan post-test sesi 1. Skor selaras
--- dengan session_assessment_results agar tampilan quiz dan N-Gain konsisten.
-INSERT INTO session_pretest_submissions (id,session_id,student_id,assessment_type,answers,score,max_score,status,submitted_at) VALUES
-(1,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),1,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":1}]'::jsonb,63,100,'completed',CURRENT_TIMESTAMP),
-(2,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),2,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":1}]'::jsonb,64,100,'completed',CURRENT_TIMESTAMP),
-(3,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),3,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":1}]'::jsonb,65,100,'completed',CURRENT_TIMESTAMP),
-(4,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),4,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":1}]'::jsonb,66,100,'completed',CURRENT_TIMESTAMP),
-(5,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),5,'pretest','[{"questionId":1,"answerIndex":0},{"questionId":2,"answerIndex":0},{"questionId":3,"answerIndex":1}]'::jsonb,67,100,'completed',CURRENT_TIMESTAMP),
-(6,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),1,'posttest','[{"questionId":4,"answerIndex":0},{"questionId":5,"answerIndex":0},{"questionId":6,"answerIndex":0}]'::jsonb,77,100,'completed',CURRENT_TIMESTAMP),
-(7,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),2,'posttest','[{"questionId":4,"answerIndex":0},{"questionId":5,"answerIndex":0},{"questionId":6,"answerIndex":0}]'::jsonb,78,100,'completed',CURRENT_TIMESTAMP),
-(8,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),3,'posttest','[{"questionId":4,"answerIndex":0},{"questionId":5,"answerIndex":0},{"questionId":6,"answerIndex":0}]'::jsonb,79,100,'completed',CURRENT_TIMESTAMP),
-(9,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),4,'posttest','[{"questionId":4,"answerIndex":0},{"questionId":5,"answerIndex":0},{"questionId":6,"answerIndex":0}]'::jsonb,80,100,'completed',CURRENT_TIMESTAMP),
-(10,(SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1),5,'posttest','[{"questionId":4,"answerIndex":0},{"questionId":5,"answerIndex":0},{"questionId":6,"answerIndex":0}]'::jsonb,81,100,'completed',CURRENT_TIMESTAMP)
-ON CONFLICT (id) DO UPDATE SET session_id=EXCLUDED.session_id,student_id=EXCLUDED.student_id,assessment_type=EXCLUDED.assessment_type,answers=EXCLUDED.answers,score=EXCLUDED.score,max_score=EXCLUDED.max_score,status=EXCLUDED.status,submitted_at=EXCLUDED.submitted_at,updated_at=now();
-SELECT setval('session_pretest_submissions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM session_pretest_submissions));
-
-INSERT INTO attendance_sessions (id,role_scope,course_code,course_name,class_name,session_number,session_date,session_time,room,lab,topic,total_students,present,absent,sick,permit,excused,status,assistant_status,assistant_check_in_time) VALUES
-(1,'lecturer','CS301','Algoritma & Struktur Data','CS301',1,'2026-01-08','08:00 - 10:00','Lab 301','','Pengenalan Algoritma',35,32,1,1,1,0,'Selesai','',''),
-(2,'lecturer','CS302','Basis Data Lanjutan','CS302',1,'2026-01-08','10:00 - 13:00','Ruang 402','','Normalisasi Database',38,35,2,1,0,0,'Selesai','',''),
-(3,'lecturer','TI-201','Pemrograman Web','TI-201',1,'2026-01-08','13:00 - 15:00','Lab Komputer 1','','REST API',40,30,9,0,1,0,'Selesai','',''),
-(4,'assistant','CS301','Algoritma & Struktur Data','CS301',1,'2026-01-08','08:00 - 10:00','','Lab 301','Pengenalan Algoritma',35,32,1,1,1,0,'Selesai','Hadir','07:55'),
-(5,'assistant','CS302','Basis Data Lanjutan','CS302',1,'2026-01-08','10:00 - 13:00','','Ruang 402','Normalisasi Database',38,35,2,1,0,0,'Selesai','Hadir','09:55'),
-(6,'assistant','CS304','Jaringan Komputer','CS304',1,'2026-01-08','15:00 - 18:00','','Lab 304','Routing Dasar',32,30,1,0,1,0,'Selesai','Hadir','14:55'),
-(7,'admin','CS301','Algoritma & Struktur Data','CS301',1,'2026-01-08','08:00 - 10:00','Lab 301','','Pengenalan Algoritma',35,33,1,0,0,1,'Selesai','Hadir','07:55')
-ON CONFLICT (id) DO UPDATE SET role_scope=EXCLUDED.role_scope, course_code=EXCLUDED.course_code, course_name=EXCLUDED.course_name, class_name=EXCLUDED.class_name, session_number=EXCLUDED.session_number, session_date=EXCLUDED.session_date, session_time=EXCLUDED.session_time, room=EXCLUDED.room, lab=EXCLUDED.lab, topic=EXCLUDED.topic, total_students=EXCLUDED.total_students, present=EXCLUDED.present, absent=EXCLUDED.absent, sick=EXCLUDED.sick, permit=EXCLUDED.permit, excused=EXCLUDED.excused, status=EXCLUDED.status, assistant_status=EXCLUDED.assistant_status, assistant_check_in_time=EXCLUDED.assistant_check_in_time;
-SELECT setval('attendance_sessions_id_seq', (SELECT COALESCE(MAX(id), 1) FROM attendance_sessions));
-
-INSERT INTO attendance_records (session_id,nim,name,status,attendance_time,check_in_time) VALUES
-(1,'210101001','Ahmad Fauzi','Hadir','08:05','08:05'),(1,'210101002','Siti Nurhaliza','Hadir','08:03','08:03'),(1,'210101003','Budi Santoso','Hadir','08:07','08:07'),(1,'210101004','Dewi Lestari','Izin','',''),(1,'210101005','Eko Prasetyo','Alpa','',''),
-(4,'210101001','Ahmad Fauzi','Hadir','08:05','08:05'),(4,'210101002','Siti Nurhaliza','Hadir','08:03','08:03'),(4,'210101003','Budi Santoso','Hadir','08:07','08:07'),(4,'210101004','Dewi Lestari','Izin','',''),(4,'210101005','Eko Prasetyo','Alpa','',''),
-(7,'210101001','Ahmad Fauzi','Hadir','','08:05'),(7,'210101002','Siti Nurhaliza','Izin','','')
-ON CONFLICT DO NOTHING;
-
-INSERT INTO lecturer_grade_courses (id,course_code,course_name,class_name,semester,academic_year,total_students,average_grade,highest_grade,lowest_grade,pass_rate) VALUES
-(1,'TIF101','Pemrograman Dasar','TIF-A','Ganjil','2024/2025',35,78.5,95,65,94.3),
-(2,'TIF102','Struktur Data','TIF-B','Ganjil','2024/2025',38,82.3,98,70,97.4),
-(3,'TIF201','Basis Data','TIF-C','Ganjil','2024/2025',32,75.8,92,60,90.0)
-ON CONFLICT (id) DO UPDATE SET average_grade=EXCLUDED.average_grade, highest_grade=EXCLUDED.highest_grade, lowest_grade=EXCLUDED.lowest_grade, pass_rate=EXCLUDED.pass_rate;
-SELECT setval('lecturer_grade_courses_id_seq', (SELECT COALESCE(MAX(id), 1) FROM lecturer_grade_courses));
-
-INSERT INTO lecturer_student_grades (id,grade_course_id,nim,name,tugas1,tugas2,tugas3,ujian_akhir,nilai_akhir,grade,status) VALUES
-(1,1,'210101001','Ahmad Fauzi',85,80,82,82,81.7,'A','Lulus'),
-(2,1,'210101002','Siti Nurhaliza',90,88,92,95,92.3,'A','Lulus'),
-(3,1,'210101003','Budi Santoso',75,78,72,75,74.5,'B','Lulus')
-ON CONFLICT (id) DO UPDATE SET grade_course_id=EXCLUDED.grade_course_id,nim=EXCLUDED.nim,name=EXCLUDED.name,tugas1=EXCLUDED.tugas1,tugas2=EXCLUDED.tugas2,tugas3=EXCLUDED.tugas3,ujian_akhir=EXCLUDED.ujian_akhir,nilai_akhir=EXCLUDED.nilai_akhir,grade=EXCLUDED.grade,status=EXCLUDED.status;
-SELECT setval('lecturer_student_grades_id_seq', (SELECT COALESCE(MAX(id), 1) FROM lecturer_student_grades));
-
-INSERT INTO assistant_practical_courses (id,course_code,name,lecturer,class_name,lab,day,start_time,end_time,semester,academic_year,students,attendance_present,attendance_total,color) VALUES
-(1,'CS301','Algoritma & Struktur Data','Dr. Ahmad Rahman','CS301','Lab 301','Senin & Kamis','08:00','10:00','Ganjil','2025/2026',35,12,14,'bg-blue-500'),
-(2,'CS302','Basis Data Lanjutan','Prof. Siti Nurhaliza','CS302','Ruang 402','Selasa','10:00','13:00','Ganjil','2025/2026',38,13,14,'bg-blue-500'),
-(3,'CS304','Jaringan Komputer','Dr. Rina Kusuma','CS304','Lab 304','Kamis','15:00','18:00','Ganjil','2025/2026',32,12,14,'bg-blue-500')
-ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,lecturer=EXCLUDED.lecturer,class_name=EXCLUDED.class_name,lab=EXCLUDED.lab,day=EXCLUDED.day,start_time=EXCLUDED.start_time,end_time=EXCLUDED.end_time,semester=EXCLUDED.semester,academic_year=EXCLUDED.academic_year,students=EXCLUDED.students,attendance_present=EXCLUDED.attendance_present,attendance_total=EXCLUDED.attendance_total,color=EXCLUDED.color;
-SELECT setval('assistant_practical_courses_id_seq', (SELECT COALESCE(MAX(id), 1) FROM assistant_practical_courses));
 
 INSERT INTO assistant_tasks (id,task,submitted,total,deadline) VALUES
 (1,'Verifikasi laporan praktikum Pemrograman Dasar',28,35,'2 hari lagi'),(2,'Input nilai praktikum Struktur Data',35,38,'3 hari lagi')
@@ -918,7 +788,6 @@ ON CONFLICT (email) DO UPDATE SET
 
 INSERT INTO lab_assistants (name,email,phone,student_id,role,lab,supervisor,semester,gpa,assigned_courses,weekly_hours,status,join_date,password,default_password,is_password_changed) VALUES
 ('Andi Pratama','asslab@app.com','081200000001','DEMO-ASLAB-001','aslab','Laboratorium Pemrograman','Prof. Dr. Ahmad Wijaya',7,3.85,3,12,'Aktif',CURRENT_DATE,'password','password',false),
-('Sari Laboran','laboran@app.com','081200000002','DEMO-LABORAN-001','laboran','Laboratorium Pemrograman','Kepala Lab Informatika',1,0,0,40,'Aktif',CURRENT_DATE,'password','password',false),
 ('Kepala Lab Informatika','kalab@app.com','081200000003','DEMO-KALAB-001','kalab','Kepala Laboratorium','-',1,0,0,40,'Aktif',CURRENT_DATE,'password','password',false)
 ON CONFLICT (email) DO UPDATE SET
   name = EXCLUDED.name,
@@ -1027,21 +896,6 @@ UPDATE classes
 SET students = ARRAY(SELECT DISTINCT unnest(students || ARRAY[(SELECT id FROM students WHERE email='mahasiswa@app.com')]))
 WHERE code = 'CS301' AND (SELECT id FROM students WHERE email='mahasiswa@app.com') IS NOT NULL;
 
--- Nilai pretest dan post-test mahasiswa demo pada sesi 1 CS301.
-INSERT INTO session_assessment_results (session_id,student_id,assessment_type,score,max_score,status,submitted_at,updated_at)
-SELECT s.id, m.id, t.atype, t.score, 100, 'completed', now(), now()
-FROM (SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1) s
-CROSS JOIN (SELECT id FROM students WHERE email='mahasiswa@app.com') m
-CROSS JOIN (VALUES ('pretest',68),('posttest',85)) AS t(atype,score)
-ON CONFLICT (session_id,student_id,assessment_type) DO UPDATE SET score=EXCLUDED.score, status='completed', updated_at=now();
-
-INSERT INTO session_pretest_submissions (session_id,student_id,assessment_type,answers,score,max_score,status,submitted_at)
-SELECT s.id, m.id, t.atype, '[]'::jsonb, t.score, 100, 'completed', now()
-FROM (SELECT id FROM course_sessions WHERE course_id=1 AND session_number=1) s
-CROSS JOIN (SELECT id FROM students WHERE email='mahasiswa@app.com') m
-CROSS JOIN (VALUES ('pretest',68),('posttest',85)) AS t(atype,score)
-ON CONFLICT (session_id,student_id,assessment_type) DO UPDATE SET score=EXCLUDED.score, status='completed', updated_at=now();
-
 -- Pengumpulan tugas mahasiswa demo: satu sudah dinilai, satu belum.
 INSERT INTO student_submissions (assignment_id,student_id,answer_text,file_name,file_size,submitted_at,score,feedback)
 SELECT a.aid, m.id, 'Jawaban tugas demo mahasiswa.', 'tugas_demo.pdf','1.0 MB','2026-01-18 09:00', a.sc, a.fb
@@ -1050,13 +904,6 @@ CROSS JOIN (VALUES (1,90::int,'Bagus, lengkap.'),(2,NULL::int,'')) AS a(aid,sc,f
 WHERE EXISTS (SELECT 1 FROM session_assignments sa WHERE sa.id=a.aid)
 ON CONFLICT (assignment_id,student_id) DO NOTHING;
 
--- Presensi mahasiswa demo pada sesi asisten CS301 agar presensi & progress terisi.
-INSERT INTO attendance_records (session_id,nim,name,status,attendance_time,check_in_time)
-SELECT (SELECT id FROM attendance_sessions WHERE role_scope='assistant' AND course_code='CS301' ORDER BY id LIMIT 1),
-       m.student_id, m.name, 'Hadir', '08:00', '08:00'
-FROM (SELECT student_id, name FROM students WHERE email='mahasiswa@app.com') m
-WHERE (SELECT id FROM attendance_sessions WHERE role_scope='assistant' AND course_code='CS301' ORDER BY id LIMIT 1) IS NOT NULL
-ON CONFLICT DO NOTHING;
 -- <<< 011_demo_account_linkage.up.sql
 
 -- >>> 012_blank_user_accounts.up.sql
@@ -1067,11 +914,20 @@ INSERT INTO students (name,email,password,default_password,student_id,program,se
 VALUES ('Akun Mahasiswa (Kosong)','akun-mahasiswa@app.com','password','password','USER-MHS-01','Teknik Informatika',1,ARRAY[]::text[],'Aktif',CURRENT_DATE,FALSE)
 ON CONFLICT (email) DO NOTHING;
 
+-- Role laboran dihapus (digabung ke admin), jadi tidak dibuat akun laboran.
 INSERT INTO lab_assistants (name,email,phone,student_id,role,lab,supervisor,semester,gpa,assigned_courses,weekly_hours,status,join_date,password,default_password,is_password_changed) VALUES
 ('Akun Aslab (Kosong)','akun-aslab@app.com','','USER-ASLAB-01','aslab','','',1,0,0,0,'Aktif',CURRENT_DATE,'password','password',FALSE),
-('Akun Laboran (Kosong)','akun-laboran@app.com','','USER-LABORAN-01','laboran','','',1,0,0,0,'Aktif',CURRENT_DATE,'password','password',FALSE),
 ('Akun Kalab (Kosong)','akun-kalab@app.com','','USER-KALAB-01','kalab','','',1,0,0,0,'Aktif',CURRENT_DATE,'password','password',FALSE)
 ON CONFLICT (email) DO NOTHING;
+
+-- Pastikan akun kosong tidak terlanjur terdaftar di kelas mana pun (mis. karena
+-- id-nya kebetulan tercantum di daftar anggota kelas), supaya benar-benar kosong.
+UPDATE classes
+SET students = ARRAY(
+  SELECT DISTINCT s FROM unnest(students) AS s
+  WHERE s NOT IN (SELECT id FROM students WHERE email LIKE 'akun-%@app.com')
+)
+WHERE students && ARRAY(SELECT id FROM students WHERE email LIKE 'akun-%@app.com');
 -- <<< 012_blank_user_accounts.up.sql
 
 COMMIT;
